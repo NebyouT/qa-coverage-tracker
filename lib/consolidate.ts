@@ -1,14 +1,16 @@
 import type { Course, Period, Settings, StudentReport, Teacher, TeacherReport } from './types';
-import { codeKey, nameKey } from './normalize';
+import { courseKey, nameKey, parseSections } from './normalize';
 import { score, type Score } from './scoring';
 
-export type FlagKind = 'missing' | 'dup' | 'incomplete' | 'lab' | 'gap' | 'pending' | 'newcourse';
+export type FlagKind = 'missing' | 'dup' | 'incomplete' | 'lab' | 'gap' | 'labsection' | 'pending' | 'newcourse';
 export type Flag = { kind: FlagKind; label: string; level: 'error' | 'warn' | 'info' };
 
 export type Row = {
   key: string;
   course: Course | null;
   department: string;
+  /** Class taking the course, e.g. "IE Sec 1" */
+  classLabel: string;
   year_of_study: number | null;
   batch: string;
   code: string;
@@ -39,7 +41,7 @@ export function median(values: number[]): number | null {
   return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
 }
 
-const looseKey = (dept: string, code: string, batch: string) => `x|${dept}|${codeKey(code)}|${batch ?? ''}`;
+const looseKey = (dept: string, code: string, name: string, batch: string) => `x|${dept}|${courseKey(code, name)}|${batch ?? ''}`;
 
 export function consolidate(args: {
   period: Period;
@@ -57,8 +59,8 @@ export function consolidate(args: {
   const sReports = args.studentReports.filter((r) => inPeriod(r, period) && r.review !== 'rejected');
 
   const groups = new Map<string, { course: Course | null; subs: TeacherReport[]; students: StudentReport[]; sample?: TeacherReport | StudentReport }>();
-  const keyFor = (courseId: number | null, dept: string, code: string, batch: string) =>
-    courseId && courseById.has(courseId) ? `c|${courseId}` : looseKey(dept, code, batch);
+  const keyFor = (courseId: number | null, dept: string, code: string, name: string, batch: string) =>
+    courseId && courseById.has(courseId) ? `c|${courseId}` : looseKey(dept, code, name, batch);
   const group = (key: string, course: Course | null) => {
     let g = groups.get(key);
     if (!g) {
@@ -70,15 +72,18 @@ export function consolidate(args: {
 
   for (const c of courses) group(`c|${c.id}`, c);
   for (const r of tReports) {
-    const g = group(keyFor(r.course_id, r.department, r.course_code, r.batch), r.course_id ? courseById.get(r.course_id) ?? null : null);
+    const g = group(keyFor(r.course_id, r.department, r.course_code, r.course_name, r.batch), r.course_id ? courseById.get(r.course_id) ?? null : null);
     g.subs.push(r);
     g.sample ??= r;
   }
   for (const r of sReports) {
-    // Students do not know the batch: match free-typed courses by department + code within the period.
-    let key = keyFor(r.course_id, r.department, r.course_code, '');
+    // Students do not know the batch: match free-typed courses by their class + code/title within the period.
+    let key = keyFor(r.course_id, r.department, r.course_code, r.course_name, '');
     if (!r.course_id || !courseById.has(r.course_id)) {
-      const match = courses.find((c) => c.department === r.department && codeKey(c.code) === codeKey(r.course_code));
+      const k = courseKey(r.course_code, r.course_name);
+      const match = courses.find(
+        (c) => (c.student_dept || c.department) === r.department && (courseKey(c.code, c.name) === k || courseKey('', c.name) === courseKey('', r.course_name)),
+      );
       key = match ? `c|${match.id}` : key;
     }
     const g = group(key, key.startsWith('c|') ? courseById.get(Number(key.slice(2))) ?? null : null);
@@ -116,7 +121,7 @@ export function consolidate(args: {
           label: distinctTeachers.size > 1 ? `${subs.length} submissions from ${distinctTeachers.size} teachers` : `Duplicate (${subs.length} submissions)`,
           level: 'warn',
         });
-      const incomplete = !report.total_chapters || report.chapters_covered === null || !report.course_code || !report.department || !report.year_of_study;
+      const incomplete = !report.total_chapters || report.chapters_covered === null || !(report.course_code || report.course_name) || !report.department || !report.year_of_study;
       const labMissing = report.has_lab && (!report.total_lab_sessions || report.labs_covered === null);
       if (incomplete) flags.push({ kind: 'incomplete', label: 'Incomplete', level: 'error' });
       if (labMissing) flags.push({ kind: 'lab', label: 'Lab data missing', level: 'error' });
@@ -129,6 +134,13 @@ export function consolidate(args: {
             level: 'error',
           });
       }
+      const perSection = parseSections(report.labs_by_section);
+      if (report.has_lab && perSection.length > 1) {
+        const hi = Math.max(...perSection);
+        const lo = Math.min(...perSection);
+        if (hi - lo >= settings.labGapThreshold)
+          flags.push({ kind: 'labsection', label: `Lab sections uneven (${perSection.join(' vs ')})`, level: 'warn' });
+      }
       if (report.review === 'pending') flags.push({ kind: 'pending', label: 'Not verified yet', level: 'info' });
       check = subs.length > 1 ? 'DUPLICATE record' : incomplete ? 'Incomplete' : labMissing ? 'Lab data missing' : 'OK';
     }
@@ -138,6 +150,11 @@ export function consolidate(args: {
       key,
       course: c,
       department: c?.department ?? report?.department ?? sample?.department ?? '',
+      classLabel: c
+        ? [c.student_dept || c.department, c.section].filter(Boolean).join(' ')
+        : report
+          ? [report.student_dept || report.department, report.section].filter(Boolean).join(' ')
+          : sample?.department ?? '',
       year_of_study: c?.year_of_study ?? report?.year_of_study ?? sample?.year_of_study ?? null,
       batch: c?.batch ?? report?.batch ?? '',
       code: c?.code ?? report?.course_code ?? sample?.course_code ?? '',
@@ -160,7 +177,8 @@ export function consolidate(args: {
     (a, b) =>
       a.department.localeCompare(b.department) ||
       (a.year_of_study ?? 99) - (b.year_of_study ?? 99) ||
-      a.code.localeCompare(b.code),
+      a.name.localeCompare(b.name) ||
+      a.classLabel.localeCompare(b.classLabel),
   );
 }
 

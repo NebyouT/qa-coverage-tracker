@@ -7,6 +7,7 @@ import type { TeacherReport } from '@/lib/types';
 import { StatusBadge } from '@/components/ui';
 import { ReviewBadge, useAdmin } from '../shared';
 import EditReport from './EditReport';
+import { LabCell } from './CourseReport';
 
 export default function TeacherSubmissions() {
   const { data, rows, act, toast } = useAdmin();
@@ -83,15 +84,15 @@ export default function TeacherSubmissions() {
                   <td className="small">{fmtDate(r.created_at)}</td>
                   <td className="small bold">{r.teacher_name}</td>
                   <td>
-                    <div className="bold small">{r.course_code}</div>
+                    <div className="bold small">{r.course_name}</div>
                     <div className="tiny muted">
-                      {r.course_name} · {r.department} Y{r.year_of_study}
+                      {[r.course_code, [r.student_dept || r.department, r.section].filter(Boolean).join(' '), `Y${r.year_of_study}`].filter(Boolean).join(' · ')}
                     </div>
                   </td>
                   <td className="num">
                     {r.chapters_covered} / {r.total_chapters}
                   </td>
-                  <td className="num">{r.has_lab ? `${r.labs_covered ?? '–'} / ${r.total_lab_sessions ?? '–'}` : 'No'}</td>
+                  <td className="num">{r.has_lab ? <LabCell r={r} /> : 'No'}</td>
                   <td>
                     <StatusBadge status={sc.status} tone={sc.tone} rate={sc.rate} />
                   </td>

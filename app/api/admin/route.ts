@@ -50,13 +50,17 @@ function courseInput(c: any, settings: Settings): CourseInput {
   const code = clean(c.code).slice(0, 30);
   const name = clean(c.name).slice(0, 120);
   const year = int(c.year_of_study, 1, 7);
-  if (!code || !name) bad('Course code and name are required.');
-  if (!year) bad(`Year of study is missing for ${code}.`);
+  if (!name) bad('Course name is required.');
+  if (!year) bad(`Year of study is missing for ${name}.`);
   const hasLab = !!c.has_lab;
+  const department = clean(c.department);
+  const studentDept = clean(c.student_dept).toUpperCase();
   return {
     academic_year: clean(c.academic_year) || settings.period.academicYear,
     semester: clean(c.semester) || settings.period.semester,
-    department: clean(c.department),
+    department,
+    student_dept: studentDept === department ? '' : studentDept,
+    section: clean(c.section).slice(0, 20),
     year_of_study: year,
     batch: clean(c.batch).slice(0, 20),
     code,
@@ -64,7 +68,15 @@ function courseInput(c: any, settings: Settings): CourseInput {
     crhr: num(c.crhr),
     total_chapters: int(c.total_chapters, 1, 100),
     has_lab: hasLab,
-    total_lab_sessions: hasLab ? int(c.total_lab_sessions, 1, 200) : null,
+    total_lab_sessions: hasLab ? int(c.total_lab_sessions, 1, 200) ?? settings.weeksPerSemester : null,
+    students: int(c.students, 0, 100000),
+    lec_hours: num(c.lec_hours),
+    lab_hours: num(c.lab_hours),
+    tut_hours: num(c.tut_hours),
+    lec_sections: int(c.lec_sections, 0, 50),
+    lab_sections: int(c.lab_sections, 0, 50),
+    tut_sections: int(c.tut_sections, 0, 50),
+    curriculum_semester: clean(c.curriculum_semester).slice(0, 10),
     source: clean(c.source) || 'admin',
   };
 }
@@ -84,6 +96,8 @@ export async function POST(req: Request) {
         s.years = (s.years ?? []).map(Number).filter((y) => y >= 1 && y <= 7);
         s.departments = (s.departments ?? []).filter((d) => clean(d.code)).map((d) => ({ code: clean(d.code), name: clean(d.name) }));
         s.gapThreshold = Math.max(Number(s.gapThreshold) || 2, 1);
+        s.weeksPerSemester = Math.min(Math.max(Number(s.weeksPerSemester) || 16, 1), 30);
+        s.labGapThreshold = Math.max(Number(s.labGapThreshold) || 3, 1);
         return ok({ settings: await saveSettings(s) });
       }
       case 'setPeriod': {
@@ -109,7 +123,13 @@ export async function POST(req: Request) {
         const id = int(b.id, 1, 1e9);
         const name = clean(b.name).slice(0, 80);
         if (!id || !name) bad('Name is required.');
-        await query(`update teachers set name=$2, department=$3, active=$4 where id=$1`, [id, name, clean(b.department), b.active !== false]);
+        await query(`update teachers set name=$2, department=$3, active=$4, source=$5 where id=$1`, [
+          id,
+          name,
+          clean(b.department),
+          b.active !== false,
+          clean(b.source) || 'admin',
+        ]);
         await query(`update teacher_reports set teacher_name=$2 where teacher_id=$1`, [id, name]);
         return ok({ ok: true });
       }

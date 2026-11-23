@@ -39,6 +39,8 @@ export const DEFAULT_SETTINGS: Settings = {
     'Using LMS',
   ],
   gapThreshold: 2,
+  weeksPerSemester: 16,
+  labGapThreshold: 3,
   teachersOpen: true,
   studentsOpen: true,
 };

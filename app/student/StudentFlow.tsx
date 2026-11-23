@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, deviceId, periodLabel, store } from '@/lib/client';
-import type { Course, Settings } from '@/lib/types';
+import { classLabel, studentDepartments } from '@/lib/normalize';
+import type { Course, PublicTeacher, Settings } from '@/lib/types';
 import { ChoiceChips, ErrorBox, Loading, NumberChips, Seg } from '@/components/ui';
 
-type Boot = { settings: Settings; courses: Course[] };
+type Boot = { settings: Settings; courses: Course[]; teachers: PublicTeacher[] };
 type Profile = { name: string; department: string; yearOfStudy: number | null; semester: string };
 type Answer = { chapters: number | null; labs: number | null };
 type Extra = { key: string; code: string; name: string; chapters: number | null };
@@ -17,7 +18,9 @@ export default function StudentFlow() {
   const [step, setStep] = useState<'profile' | 'courses' | 'done'>('profile');
   const [profile, setProfile] = useState<Profile>({ name: '', department: '', yearOfStudy: null, semester: '' });
   const [answers, setAnswers] = useState<Record<number, Answer>>({});
+  const [addedIds, setAddedIds] = useState<number[]>([]);
   const [extras, setExtras] = useState<Extra[]>([]);
+  const [search, setSearch] = useState('');
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -28,10 +31,11 @@ export default function StudentFlow() {
     try {
       const b = await api<Boot>('/api/public/bootstrap');
       setBoot(b);
+      const depts = studentDepartments(b.settings.departments.map((d) => d.code), b.courses);
       const saved = store.get<Profile | null>('qa.student', null);
       setProfile({
         name: saved?.name ?? '',
-        department: saved?.department && b.settings.departments.some((d) => d.code === saved.department) ? saved.department : '',
+        department: saved?.department && depts.includes(saved.department) ? saved.department : '',
         yearOfStudy: saved?.yearOfStudy && b.settings.years.includes(saved.yearOfStudy) ? saved.yearOfStudy : null,
         semester: b.settings.period.semester,
       });
@@ -45,18 +49,27 @@ export default function StudentFlow() {
   }, [load]);
 
   const s = boot?.settings;
+  const tName = useMemo(() => new Map((boot?.teachers ?? []).map((t) => [t.id, t.name])), [boot]);
+  const depts = useMemo(() => (boot ? studentDepartments(boot.settings.departments.map((d) => d.code), boot.courses) : []), [boot]);
   const periodKey = s ? `${s.period.academicYear}|${profile.semester}|${s.period.reportType}` : '';
   const prevSubmit = useMemo(() => (periodKey ? store.get<Record<string, string>>('qa.studentSent', {})[periodKey] : undefined), [periodKey, step]);
 
-  const courses = useMemo(
-    () =>
-      (boot?.courses ?? []).filter(
-        (c) => c.department === profile.department && c.year_of_study === profile.yearOfStudy && c.semester === profile.semester,
-      ),
-    [boot, profile],
+  const semCourses = useMemo(() => (boot?.courses ?? []).filter((c) => c.semester === profile.semester), [boot, profile.semester]);
+  const mine = useMemo(
+    () => semCourses.filter((c) => (c.student_dept || c.department) === profile.department && c.year_of_study === profile.yearOfStudy),
+    [semCourses, profile],
   );
+  const shown = useMemo(() => [...mine, ...semCourses.filter((c) => addedIds.includes(c.id) && !mine.includes(c))], [mine, semCourses, addedIds]);
 
-  const answered = courses.filter((c) => answers[c.id]?.chapters !== null && answers[c.id]?.chapters !== undefined);
+  const term = search.trim().toLowerCase();
+  const results = term
+    ? semCourses
+        .filter((c) => !shown.includes(c))
+        .filter((c) => `${c.name} ${c.code} ${classLabel(c)}`.toLowerCase().includes(term))
+        .slice(0, 6)
+    : [];
+
+  const answered = shown.filter((c) => answers[c.id]?.chapters !== null && answers[c.id]?.chapters !== undefined);
   const extrasReady = extras.filter((e) => (e.code.trim() || e.name.trim()) && e.chapters !== null);
   const total = answered.length + extrasReady.length;
   const profileOk = profile.name.trim().length >= 2 && profile.department && profile.yearOfStudy && profile.semester;
@@ -137,12 +150,8 @@ export default function StudentFlow() {
           />
         </label>
         <div className="field">
-          <span className="label">Department</span>
-          <ChoiceChips
-            options={s.departments.map((d) => ({ value: d.code, label: d.code }))}
-            value={profile.department || null}
-            onChange={(v) => setProfile({ ...profile, department: v })}
-          />
+          <span className="label">Your department</span>
+          <ChoiceChips options={depts.map((d) => ({ value: d, label: d }))} value={profile.department || null} onChange={(v) => setProfile({ ...profile, department: v })} />
         </div>
         <div className="field">
           <span className="label">Year</span>
@@ -175,6 +184,8 @@ export default function StudentFlow() {
     );
   }
 
+  const sections = new Set(mine.map((c) => c.section).filter(Boolean));
+
   return (
     <Shell period={periodLabel({ ...s.period, semester: profile.semester })}>
       <div className="between">
@@ -199,25 +210,27 @@ export default function StudentFlow() {
       <div className="stack">
         <div>
           <h2>How many chapters has your class covered?</h2>
-          <p className="small muted">Tap a number for each course. Skip courses you don&apos;t take.</p>
+          <p className="small muted">
+            Tap a number for each course. Skip courses you don&apos;t take{sections.size > 1 ? ' or that belong to another section' : ''}.
+          </p>
         </div>
 
-        {!courses.length && (
-          <div className="card small muted">No courses are listed for your year yet. Add them below.</div>
-        )}
+        {!mine.length && <div className="card small muted">No courses are listed for your class yet. Search for them below.</div>}
 
-        {courses.map((c) => {
+        {shown.map((c) => {
           const a = answers[c.id] ?? { chapters: null, labs: null };
           const set = (p: Partial<Answer>) => setAnswers((prev) => ({ ...prev, [c.id]: { ...a, ...p } }));
           const done = a.chapters !== null;
+          const teachers = c.teacher_ids.map((id) => tName.get(id)).filter(Boolean).join(', ');
           return (
             <div key={c.id} className={`card stack${done ? ' ok' : ''}`}>
               <div className="between" style={{ flexWrap: 'nowrap' }}>
                 <div className="grow">
                   <div className="bold">{c.name}</div>
                   <div className="small muted">
-                    {c.code}
-                    {c.total_chapters ? ` · ${c.total_chapters} chapters` : ''}
+                    {[c.code, c.section || (mine.includes(c) ? '' : classLabel(c)), teachers, c.total_chapters ? `${c.total_chapters} chapters` : '']
+                      .filter(Boolean)
+                      .join(' · ')}
                   </div>
                 </div>
                 {done && (
@@ -243,7 +256,7 @@ export default function StudentFlow() {
         {extras.map((e, i) => (
           <div key={e.key} className="card stack">
             <div className="between">
-              <span className="label">Course not in the list</span>
+              <span className="label">Other course</span>
               <button className="link-btn small" onClick={() => setExtras(extras.filter((_, j) => j !== i))}>
                 Remove
               </button>
@@ -251,15 +264,15 @@ export default function StudentFlow() {
             <div className="grid-2">
               <input
                 className="input"
-                placeholder="Course code"
-                value={e.code}
-                onChange={(ev) => setExtras(extras.map((x, j) => (j === i ? { ...x, code: ev.target.value } : x)))}
-              />
-              <input
-                className="input"
                 placeholder="Course name"
                 value={e.name}
                 onChange={(ev) => setExtras(extras.map((x, j) => (j === i ? { ...x, name: ev.target.value } : x)))}
+              />
+              <input
+                className="input"
+                placeholder="Code (optional)"
+                value={e.code}
+                onChange={(ev) => setExtras(extras.map((x, j) => (j === i ? { ...x, code: ev.target.value } : x)))}
               />
             </div>
             <div className="field">
@@ -269,9 +282,44 @@ export default function StudentFlow() {
           </div>
         ))}
 
-        <button className="btn block" onClick={() => setExtras([...extras, { key: String(Date.now()), code: '', name: '', chapters: null }])}>
-          ＋ Add a course not listed
-        </button>
+        <div className="card stack">
+          <span className="label">Add another course</span>
+          <input className="input" placeholder="Type the course name…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          {results.map((c) => (
+            <button
+              key={c.id}
+              className="list-btn"
+              onClick={() => {
+                setAddedIds([...addedIds, c.id]);
+                setSearch('');
+              }}
+            >
+              <span className="grow">
+                <span className="bold">{c.name}</span>
+                <br />
+                <span className="small muted">
+                  {classLabel(c)} · Year {c.year_of_study}
+                </span>
+              </span>
+              <span className="pill">Add</span>
+            </button>
+          ))}
+          <button
+            className="list-btn"
+            style={{ borderStyle: 'dashed' }}
+            onClick={() => {
+              setExtras([...extras, { key: String(Date.now()), code: '', name: search.trim(), chapters: null }]);
+              setSearch('');
+            }}
+          >
+            <span className="avatar">＋</span>
+            <span className="grow">
+              <span className="bold">Other</span>
+              <br />
+              <span className="small muted">{search.trim() ? `Add “${search.trim()}”` : 'Course not in the list? Type it'}</span>
+            </span>
+          </button>
+        </div>
 
         <label className="field">
           <span className="label">Anything the QA team should know? (optional)</span>

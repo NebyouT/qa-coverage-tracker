@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, deviceId, initials, periodLabel, store } from '@/lib/client';
+import { classLabel, parseSections, studentDepartments } from '@/lib/normalize';
 import { score } from '@/lib/scoring';
 import type { Course, PublicTeacher, Settings, TeacherReport } from '@/lib/types';
 import { ChoiceChips, ErrorBox, Loading, Modal, NumberChips, Seg, StatusBadge, Stepper } from '@/components/ui';
@@ -12,44 +13,75 @@ type Boot = { settings: Settings; teachers: PublicTeacher[]; courses: Course[] }
 type Draft = {
   key: string;
   courseId?: number;
-  newCourse?: { code: string; name: string; yearOfStudy: number; batch: string; crhr: number | null };
+  newCourse?: { code: string; name: string; yearOfStudy: number; batch: string; crhr: number | null; studentDept: string; section: string };
   code: string;
   name: string;
   sub: string;
+  /** Facts from the course offering, shown instead of asking */
+  facts: string[];
+  labKnown: boolean;
+  labSections: number;
+  hasTutorial: boolean;
   totalChapters: number | null;
   chaptersCovered: number | null;
   hasLab: boolean | null;
   totalLabSessions: number | null;
   labsCovered: number | null;
+  labsBySection: (number | null)[];
+  tutorialsDone: number | null;
   tags: string[];
   remarks: string;
   touched: boolean;
   last?: TeacherReport;
 };
 
-const subFor = (c: { year_of_study: number; batch: string; department: string }) =>
-  `${c.department} · Year ${c.year_of_study}${c.batch ? ` · Batch ${c.batch}` : ''}`;
+const subFor = (c: { year_of_study: number; batch: string; department: string; student_dept?: string; section?: string }) =>
+  `${classLabel(c)} · Year ${c.year_of_study}${c.batch ? ` · Batch ${c.batch}` : ''}`;
+
+const hrs = (v: number | null) => (v === null ? '' : `${v}h`);
+
+function factsFor(c: Course): string[] {
+  const f: string[] = [];
+  if (c.crhr) f.push(`${c.crhr} CrHr`);
+  if (c.lec_hours) f.push(`Lecture ${hrs(c.lec_hours)}/wk`);
+  if (c.lab_hours) f.push(`Lab ${hrs(c.lab_hours)}/wk${(c.lab_sections ?? 1) > 1 ? ` · ${c.lab_sections} lab sections` : ''}`);
+  if (c.tut_hours) f.push(`Tutorial ${hrs(c.tut_hours)}/wk`);
+  if (c.students) f.push(`${c.students} students`);
+  return f;
+}
 
 function isComplete(d: Draft) {
   if (!d.totalChapters || d.totalChapters < 1 || d.chaptersCovered === null || d.chaptersCovered > d.totalChapters) return false;
   if (d.hasLab === null) return false;
-  if (d.hasLab && (!d.totalLabSessions || d.labsCovered === null || d.labsCovered > d.totalLabSessions)) return false;
+  if (d.hasLab) {
+    if (!d.totalLabSessions) return false;
+    if (d.labSections > 1) return d.labsBySection.length >= d.labSections && d.labsBySection.slice(0, d.labSections).every((v) => v !== null && v <= d.totalLabSessions!);
+    if (d.labsCovered === null || d.labsCovered > d.totalLabSessions) return false;
+  }
   return true;
 }
 
-function draftFromCourse(c: Course, last?: TeacherReport): Draft {
-  const known = c.total_chapters !== null;
+function draftFromCourse(c: Course, s: Settings, last?: TeacherReport): Draft {
+  const labKnown = c.lab_hours !== null || (c.total_chapters !== null && !last);
+  const labSections = c.has_lab ? Math.max(c.lab_sections ?? 1, 1) : 1;
+  const prevSections = parseSections(last?.labs_by_section);
   return {
     key: `c:${c.id}`,
     courseId: c.id,
     code: c.code,
     name: c.name,
     sub: subFor(c),
+    facts: factsFor(c),
+    labKnown: c.lab_hours !== null,
+    labSections,
+    hasTutorial: (c.tut_hours ?? 0) > 0,
     totalChapters: last?.total_chapters ?? c.total_chapters,
     chaptersCovered: last?.chapters_covered ?? null,
-    hasLab: last ? last.has_lab : known ? c.has_lab : null,
-    totalLabSessions: last?.total_lab_sessions ?? c.total_lab_sessions,
+    hasLab: last ? last.has_lab : labKnown ? c.has_lab : null,
+    totalLabSessions: last?.total_lab_sessions ?? c.total_lab_sessions ?? (c.has_lab ? s.weeksPerSemester : null),
     labsCovered: last?.labs_covered ?? null,
+    labsBySection: Array.from({ length: labSections }, (_, i) => prevSections[i] ?? (labSections === 1 ? last?.labs_covered ?? null : null)),
+    tutorialsDone: last?.tutorials_done ?? null,
     tags: last?.tags ? last.tags.split('; ').filter(Boolean) : [],
     remarks: last?.remarks ?? '',
     touched: false,
@@ -60,7 +92,7 @@ function draftFromCourse(c: Course, last?: TeacherReport): Draft {
 export default function TeacherFlow() {
   const [boot, setBoot] = useState<Boot | null>(null);
   const [error, setError] = useState('');
-  const [teacherId, setTeacherId] = useState<number | null>(null);
+  const [teacher, setTeacher] = useState<PublicTeacher | null>(null);
   const [loadingMine, setLoadingMine] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [order, setOrder] = useState<string[]>([]);
@@ -76,7 +108,8 @@ export default function TeacherFlow() {
       const b = await api<Boot>('/api/public/bootstrap');
       setBoot(b);
       const saved = store.get<number | null>('qa.teacher', null);
-      if (saved && b.teachers.some((t) => t.id === saved)) setTeacherId(saved);
+      const t = saved ? b.teachers.find((x) => x.id === saved) : undefined;
+      if (t) setTeacher(t);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -86,44 +119,49 @@ export default function TeacherFlow() {
     loadBoot();
   }, [loadBoot]);
 
-  const loadMine = useCallback(async (id: number) => {
-    setLoadingMine(true);
-    setError('');
-    try {
-      const r = await api<{ courses: Course[]; reports: TeacherReport[] }>(`/api/public/teacher?id=${id}`);
-      const d: Record<string, Draft> = {};
-      const keys: string[] = [];
-      for (const c of r.courses) {
-        const last = r.reports.find((x) => x.course_id === c.id);
-        const dr = draftFromCourse(c, last);
-        d[dr.key] = dr;
-        keys.push(dr.key);
+  const loadMine = useCallback(
+    async (id: number) => {
+      if (!boot) return;
+      setLoadingMine(true);
+      setError('');
+      try {
+        const r = await api<{ courses: Course[]; reports: TeacherReport[] }>(`/api/public/teacher?id=${id}`);
+        const d: Record<string, Draft> = {};
+        const keys: string[] = [];
+        for (const c of r.courses) {
+          const last = r.reports.find((x) => x.course_id === c.id);
+          const dr = draftFromCourse(c, boot.settings, last);
+          d[dr.key] = dr;
+          keys.push(dr.key);
+        }
+        setDrafts(d);
+        setOrder(keys);
+        setOpen(keys.find((k) => !d[k].last) ?? null);
+      } catch (e) {
+        setError((e as Error).message);
+        if (/not found/i.test((e as Error).message)) {
+          store.set('qa.teacher', null);
+          setTeacher(null);
+        }
+      } finally {
+        setLoadingMine(false);
       }
-      setDrafts(d);
-      setOrder(keys);
-      setOpen(keys.find((k) => !d[k].last) ?? null);
-    } catch (e) {
-      setError((e as Error).message);
-      if (/not found/i.test((e as Error).message)) {
-        store.set('qa.teacher', null);
-        setTeacherId(null);
-      }
-    } finally {
-      setLoadingMine(false);
-    }
-  }, []);
+    },
+    [boot],
+  );
 
   useEffect(() => {
-    if (teacherId) loadMine(teacherId);
-  }, [teacherId, loadMine]);
-
-  const teacher = boot?.teachers.find((t) => t.id === teacherId) ?? null;
+    if (teacher) loadMine(teacher.id);
+  }, [teacher, loadMine]);
 
   const update = (key: string, patch: Partial<Draft>) =>
     setDrafts((prev) => {
       const cur = { ...prev[key], ...patch, touched: true };
       if (cur.totalChapters !== null && cur.chaptersCovered !== null && cur.chaptersCovered > cur.totalChapters) cur.chaptersCovered = null;
-      if (cur.totalLabSessions !== null && cur.labsCovered !== null && cur.labsCovered > cur.totalLabSessions) cur.labsCovered = null;
+      if (cur.totalLabSessions !== null) {
+        if (cur.labsCovered !== null && cur.labsCovered > cur.totalLabSessions) cur.labsCovered = null;
+        cur.labsBySection = cur.labsBySection.map((v) => (v !== null && v > cur.totalLabSessions! ? null : v));
+      }
       return { ...prev, [key]: cur };
     });
 
@@ -146,7 +184,9 @@ export default function TeacherFlow() {
           chaptersCovered: d.chaptersCovered,
           hasLab: d.hasLab,
           totalLabSessions: d.hasLab ? d.totalLabSessions : null,
-          labsCovered: d.hasLab ? d.labsCovered : null,
+          labsCovered: d.hasLab ? (d.labSections > 1 ? null : d.labsCovered) : null,
+          labsBySection: d.hasLab && d.labSections > 1 ? d.labsBySection.slice(0, d.labSections) : undefined,
+          tutorialsDone: d.tutorialsDone,
           tags: d.tags,
           remarks: d.remarks,
         })),
@@ -200,7 +240,7 @@ export default function TeacherFlow() {
           departments={s.departments.map((d) => d.code)}
           onPick={(t) => {
             store.set('qa.teacher', t.id);
-            setTeacherId(t.id);
+            setTeacher(t);
           }}
         />
       </Shell>
@@ -219,22 +259,12 @@ export default function TeacherFlow() {
         </div>
         <div className="stack">
           {done.map((d) => {
-            const sc = score(
-              {
-                report_type: s.period.reportType,
-                total_chapters: d.totalChapters,
-                chapters_covered: d.chaptersCovered,
-                has_lab: !!d.hasLab,
-                total_lab_sessions: d.totalLabSessions,
-                labs_covered: d.labsCovered,
-              },
-              s,
-            );
+            const sc = scoreDraft(d, s);
             return (
               <div className="card tight between" key={d.key}>
                 <div className="grow">
-                  <div className="bold">{d.code}</div>
-                  <div className="small muted">{d.name}</div>
+                  <div className="bold">{d.name}</div>
+                  <div className="small muted">{d.sub}</div>
                 </div>
                 <StatusBadge status={sc.status} tone={sc.tone} rate={sc.rate} />
               </div>
@@ -258,23 +288,21 @@ export default function TeacherFlow() {
 
   return (
     <Shell period={periodLabel(s.period)}>
-      <div className="between">
-        <div className="row">
-          <span className="avatar">{initials(teacher.name)}</span>
-          <div>
-            <div className="bold">{teacher.name}</div>
-            <button
-              className="link-btn small"
-              onClick={() => {
-                store.set('qa.teacher', null);
-                setTeacherId(null);
-                setDrafts({});
-                setOrder([]);
-              }}
-            >
-              Not you? Change
-            </button>
-          </div>
+      <div className="row">
+        <span className="avatar">{initials(teacher.name)}</span>
+        <div>
+          <div className="bold">{teacher.name}</div>
+          <button
+            className="link-btn small"
+            onClick={() => {
+              store.set('qa.teacher', null);
+              setTeacher(null);
+              setDrafts({});
+              setOrder([]);
+            }}
+          >
+            Not you? Change
+          </button>
         </div>
       </div>
 
@@ -331,14 +359,39 @@ export default function TeacherFlow() {
             open={picker}
             onClose={() => setPicker(false)}
             courses={boot.courses.filter((c) => c.semester === s.period.semester && !myCourseIds.has(c.id))}
+            teachers={boot.teachers}
             teacherDept={teacher.department}
-            years={s.years}
+            classes={studentDepartments(
+              s.departments.map((d) => d.code),
+              boot.courses,
+            )}
+            settings={s}
             onAdd={addCourse}
           />
         </>
       )}
     </Shell>
   );
+}
+
+function scoreDraft(d: Draft, s: Settings) {
+  const labs = d.labSections > 1 ? avgOf(d.labsBySection.slice(0, d.labSections)) : d.labsCovered;
+  return score(
+    {
+      report_type: s.period.reportType,
+      total_chapters: d.totalChapters,
+      chapters_covered: d.chaptersCovered,
+      has_lab: !!d.hasLab,
+      total_lab_sessions: d.totalLabSessions,
+      labs_covered: labs,
+    },
+    s,
+  );
+}
+
+function avgOf(xs: (number | null)[]) {
+  const v = xs.filter((x): x is number => x !== null);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 }
 
 function Shell({ children, period }: { children: React.ReactNode; period?: string }) {
@@ -367,21 +420,67 @@ function PickTeacher({
 }) {
   const [q, setQ] = useState('');
   const [dept, setDept] = useState<string>('All');
-  const list = teachers.filter(
-    (t) => (dept === 'All' || t.department === dept) && t.name.toLowerCase().includes(q.trim().toLowerCase()),
-  );
+  const [adding, setAdding] = useState(false);
+  const [newDept, setNewDept] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const term = q.trim().toLowerCase();
+  const list = teachers.filter((t) => (dept === 'All' || t.department === dept) && t.name.toLowerCase().includes(term));
+
+  if (adding) {
+    return (
+      <div className="stack">
+        <div>
+          <h1>Add your name</h1>
+          <p className="muted">The QA team will check it. You can report right away.</p>
+        </div>
+        <label className="field">
+          <span className="label">Full name</span>
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} autoFocus placeholder="e.g. Abebe Kebede" />
+        </label>
+        <div className="field">
+          <span className="label">Your department</span>
+          <ChoiceChips options={departments.map((d) => ({ value: d, label: d }))} value={newDept} onChange={setNewDept} />
+        </div>
+        {err && <div className="alert error">{err}</div>}
+        <div className="row">
+          <button className="btn" onClick={() => setAdding(false)}>
+            Back
+          </button>
+          <button
+            className="btn primary grow"
+            disabled={q.trim().length < 3 || !newDept || busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr('');
+              try {
+                const r = await api<{ teacher: PublicTeacher }>('/api/public/teacher', { action: 'register', name: q.trim(), department: newDept });
+                onPick(r.teacher);
+              } catch (e) {
+                setErr((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? 'Saving…' : 'Continue'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="stack">
       <div>
         <h1>Who are you?</h1>
-        <p className="muted">Tap your name. We will remember it on this phone.</p>
+        <p className="muted">Type part of your name and tap it. We remember it on this phone.</p>
       </div>
       <input className="input" placeholder="Search your name…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-      <ChoiceChips
-        options={['All', ...departments].map((d) => ({ value: d, label: d }))}
-        value={dept}
-        onChange={setDept}
-      />
+      {departments.length > 1 && (
+        <ChoiceChips options={['All', ...departments].map((d) => ({ value: d, label: d }))} value={dept} onChange={setDept} />
+      )}
       <div className="stack" style={{ gap: 8 }}>
         {list.map((t) => (
           <button key={t.id} className="list-btn" onClick={() => onPick(t)}>
@@ -394,12 +493,22 @@ function PickTeacher({
             <span className="faint">›</span>
           </button>
         ))}
-        {!list.length && (
-          <div className="card small muted">
-            {teachers.length ? 'No name matches. Check the spelling or department.' : 'No teachers have been added yet.'} If your name is
-            missing, ask the QA team to add it.
-          </div>
-        )}
+        {!list.length && <div className="small muted">No name matches “{q}”.</div>}
+        <button
+          className="list-btn"
+          style={{ borderStyle: 'dashed' }}
+          onClick={() => {
+            setNewDept(dept !== 'All' ? dept : null);
+            setAdding(true);
+          }}
+        >
+          <span className="avatar">＋</span>
+          <span className="grow">
+            <span className="bold">My name isn&apos;t listed</span>
+            <br />
+            <span className="small muted">Add it — {q.trim() ? `“${q.trim()}”` : 'takes a few seconds'}</span>
+          </span>
+        </button>
       </div>
     </div>
   );
@@ -421,25 +530,18 @@ function CourseCard({
   onRemove: () => void;
 }) {
   const complete = isComplete(d);
-  const sc = useMemo(
-    () =>
-      score(
-        {
-          report_type: settings.period.reportType,
-          total_chapters: d.totalChapters,
-          chapters_covered: d.chaptersCovered,
-          has_lab: !!d.hasLab,
-          total_lab_sessions: d.totalLabSessions,
-          labs_covered: d.labsCovered,
-        },
-        settings,
-      ),
-    [d, settings],
-  );
+  const sc = useMemo(() => scoreDraft(d, settings), [d, settings]);
 
   let badge: React.ReactNode = <span className="badge neutral">To report</span>;
   if (d.touched && complete) badge = <span className="badge info">Ready to send</span>;
   else if (d.last && !d.touched) badge = <span className="badge ok">✓ Reported</span>;
+
+  const labChips = (value: number | null, set: (v: number) => void) =>
+    d.totalLabSessions && d.totalLabSessions <= 20 ? (
+      <NumberChips max={d.totalLabSessions} value={value} onChange={set} />
+    ) : (
+      <Stepper value={value} max={d.totalLabSessions ?? 100} onChange={set} />
+    );
 
   return (
     <div className={`card${open ? ' active' : d.last && !d.touched ? ' ok' : ''}`} style={{ padding: 0 }}>
@@ -450,7 +552,8 @@ function CourseCard({
       >
         <div className="grow">
           <div className="bold">
-            {d.code} <span style={{ fontWeight: 500 }}>· {d.name}</span>
+            {d.name}
+            {d.code && <span className="muted" style={{ fontWeight: 500 }}> · {d.code}</span>}
           </div>
           <div className="small muted">{d.sub}</div>
         </div>
@@ -459,11 +562,27 @@ function CourseCard({
 
       {open && (
         <div className="stack" style={{ padding: '0 16px 16px', gap: 18 }}>
+          {d.facts.length > 0 && (
+            <div className="chips">
+              {d.facts.map((f) => (
+                <span key={f} className="badge neutral">
+                  {f}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="divider" />
-          <div className="between">
-            <span className="label">Total chapters in the course</span>
-            <Stepper value={d.totalChapters} min={1} max={60} onChange={(v) => onChange({ totalChapters: v })} label="Total chapters" />
-          </div>
+          {d.totalChapters === null || d.totalChapters <= 15 ? (
+            <div className="field">
+              <span className="label">Total chapters in the course</span>
+              <NumberChips min={1} max={15} value={d.totalChapters} onChange={(v) => onChange({ totalChapters: v })} />
+            </div>
+          ) : (
+            <div className="between">
+              <span className="label">Total chapters in the course</span>
+              <Stepper value={d.totalChapters} min={1} max={60} onChange={(v) => onChange({ totalChapters: v })} label="Total chapters" />
+            </div>
+          )}
 
           <div className="field">
             <span className="label">Chapters covered so far</span>
@@ -478,33 +597,51 @@ function CourseCard({
             )}
           </div>
 
-          <div className="between">
-            <span className="label">Does this course have a lab?</span>
-            <Seg
-              options={[
-                { value: false, label: 'No lab' },
-                { value: true, label: 'Has lab' },
-              ]}
-              value={d.hasLab}
-              onChange={(v) => onChange({ hasLab: v, totalLabSessions: v ? d.totalLabSessions ?? 8 : d.totalLabSessions })}
-            />
-          </div>
+          {!d.labKnown && (
+            <div className="between">
+              <span className="label">Does this course have a lab?</span>
+              <Seg
+                options={[
+                  { value: false, label: 'No lab' },
+                  { value: true, label: 'Has lab' },
+                ]}
+                value={d.hasLab}
+                onChange={(v) => onChange({ hasLab: v, totalLabSessions: v ? d.totalLabSessions ?? settings.weeksPerSemester : d.totalLabSessions })}
+              />
+            </div>
+          )}
 
           {d.hasLab && (
             <>
               <div className="between">
-                <span className="label">Total lab sessions</span>
+                <span className="label">Lab sessions planned{d.labSections > 1 ? ' (each section)' : ''}</span>
                 <Stepper value={d.totalLabSessions} min={1} max={100} onChange={(v) => onChange({ totalLabSessions: v })} label="Total lab sessions" />
               </div>
-              <div className="field">
-                <span className="label">Lab sessions done so far</span>
-                {d.totalLabSessions && d.totalLabSessions <= 20 ? (
-                  <NumberChips max={d.totalLabSessions} value={d.labsCovered} onChange={(v) => onChange({ labsCovered: v })} />
-                ) : (
-                  <Stepper value={d.labsCovered} max={d.totalLabSessions ?? 100} onChange={(v) => onChange({ labsCovered: v })} />
-                )}
-              </div>
+              {d.labSections > 1 ? (
+                Array.from({ length: d.labSections }, (_, i) => (
+                  <div className="field" key={i}>
+                    <span className="label">Lab section {i + 1}: sessions done</span>
+                    {labChips(d.labsBySection[i] ?? null, (v) => {
+                      const next = [...d.labsBySection];
+                      next[i] = v;
+                      onChange({ labsBySection: next });
+                    })}
+                  </div>
+                ))
+              ) : (
+                <div className="field">
+                  <span className="label">Lab sessions done so far</span>
+                  {labChips(d.labsCovered, (v) => onChange({ labsCovered: v }))}
+                </div>
+              )}
             </>
+          )}
+
+          {d.hasTutorial && (
+            <div className="between">
+              <span className="label">Tutorial sessions done (optional)</span>
+              <Stepper value={d.tutorialsDone} min={0} max={100} onChange={(v) => onChange({ tutorialsDone: v })} label="Tutorial sessions" />
+            </div>
           )}
 
           {settings.tags.length > 0 && (
@@ -554,7 +691,7 @@ function CourseCard({
           </div>
 
           {!d.last && (
-            <button className="link-btn small danger" style={{ alignSelf: 'flex-start', color: 'var(--err)' }} onClick={onRemove}>
+            <button className="link-btn small" style={{ alignSelf: 'flex-start', color: 'var(--err)' }} onClick={onRemove}>
               Not my course — remove
             </button>
           )}
@@ -568,47 +705,52 @@ function AddCourseModal({
   open,
   onClose,
   courses,
+  teachers,
   teacherDept,
-  years,
+  classes,
+  settings,
   onAdd,
 }: {
   open: boolean;
   onClose: () => void;
   courses: Course[];
+  teachers: PublicTeacher[];
   teacherDept: string;
-  years: number[];
+  classes: string[];
+  settings: Settings;
   onAdd: (d: Draft) => void;
 }) {
   const [q, setQ] = useState('');
   const [all, setAll] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [nc, setNc] = useState({ code: '', name: '', yearOfStudy: 0, batch: '', crhr: '' });
+  const [nc, setNc] = useState({ code: '', name: '', yearOfStudy: 0, batch: '', crhr: '', studentDept: '', section: '' });
+  const tName = useMemo(() => new Map(teachers.map((t) => [t.id, t.name])), [teachers]);
 
   useEffect(() => {
     if (open) {
       setQ('');
       setCreating(false);
-      setNc({ code: '', name: '', yearOfStudy: 0, batch: '', crhr: '' });
+      setNc({ code: '', name: '', yearOfStudy: 0, batch: '', crhr: '', studentDept: teacherDept, section: '' });
     }
-  }, [open]);
+  }, [open, teacherDept]);
 
   const term = q.trim().toLowerCase();
   const list = courses
-    .filter((c) => all || !teacherDept || c.department === teacherDept)
-    .filter((c) => !term || `${c.code} ${c.name}`.toLowerCase().includes(term));
+    .filter((c) => all || term || !teacherDept || c.department === teacherDept)
+    .filter((c) => !term || `${c.code} ${c.name} ${classLabel(c)} ${c.teacher_ids.map((id) => tName.get(id)).join(' ')}`.toLowerCase().includes(term));
 
-  const canCreate = nc.code.trim() && nc.name.trim() && nc.yearOfStudy;
+  const canCreate = nc.name.trim() && nc.yearOfStudy;
 
   return (
-    <Modal open={open} onClose={onClose} title={creating ? 'New course' : 'Add a course'}>
+    <Modal open={open} onClose={onClose} title={creating ? 'Other course' : 'Add a course'}>
       {!creating ? (
         <div className="stack">
-          <input className="input" placeholder="Search code or name…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-          {teacherDept && (
+          <input className="input" placeholder="Type course name or code…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          {teacherDept && !term && (
             <Seg
               options={[
-                { value: false, label: `${teacherDept} only` },
-                { value: true, label: 'All departments' },
+                { value: false, label: `${teacherDept} courses` },
+                { value: true, label: 'All' },
               ]}
               value={all}
               onChange={setAll}
@@ -616,51 +758,69 @@ function AddCourseModal({
           )}
           <div className="stack" style={{ gap: 8, maxHeight: '45vh', overflow: 'auto' }}>
             {list.map((c) => (
-              <button key={c.id} className="list-btn" onClick={() => onAdd(draftFromCourse(c))}>
+              <button key={c.id} className="list-btn" onClick={() => onAdd(draftFromCourse(c, settings))}>
                 <span className="grow">
-                  <span className="bold">{c.code}</span> · {c.name}
+                  <span className="bold">{c.name}</span>
+                  {c.code && <span className="muted"> · {c.code}</span>}
                   <br />
-                  <span className="small muted">{subFor(c)}</span>
+                  <span className="small muted">
+                    {subFor(c)}
+                    {c.teacher_ids.length ? ` · ${c.teacher_ids.map((id) => tName.get(id)).filter(Boolean).join(', ')}` : ''}
+                  </span>
                 </span>
                 <span className="pill">Add</span>
               </button>
             ))}
-            {!list.length && <div className="small muted">No matching course in the list.</div>}
+            {!list.length && <div className="small muted">No course matches “{q}”.</div>}
           </div>
           <button
-            className="btn block"
+            className="list-btn"
+            style={{ borderStyle: 'dashed' }}
             onClick={() => {
               setCreating(true);
-              setNc((n) => ({ ...n, code: /\d/.test(q) ? q : '', name: /\d/.test(q) ? '' : q }));
+              setNc((n) => ({ ...n, name: q.trim() }));
             }}
           >
-            Can&apos;t find it? Add a new course
+            <span className="avatar">＋</span>
+            <span className="grow">
+              <span className="bold">Other course</span>
+              <br />
+              <span className="small muted">{q.trim() ? `Add “${q.trim()}”` : 'Not in the list? Type it'}</span>
+            </span>
           </button>
         </div>
       ) : (
         <div className="stack">
-          <div className="grid-2">
+          <label className="field">
+            <span className="label">Course name</span>
+            <input className="input" value={nc.name} placeholder="e.g. Database Systems" onChange={(e) => setNc({ ...nc, name: e.target.value })} autoFocus />
+          </label>
+          <div className="field">
+            <span className="label">Which students take it?</span>
+            <ChoiceChips options={classes.map((c) => ({ value: c, label: c }))} value={nc.studentDept || null} onChange={(v) => setNc({ ...nc, studentDept: v })} />
+          </div>
+          <div className="field">
+            <span className="label">Year of study</span>
+            <ChoiceChips
+              options={settings.years.map((y) => ({ value: y, label: `Year ${y}` }))}
+              value={nc.yearOfStudy || null}
+              onChange={(v) => setNc({ ...nc, yearOfStudy: v })}
+            />
+          </div>
+          <div className="grid-3">
             <label className="field">
-              <span className="label">Course code</span>
-              <input className="input" value={nc.code} placeholder="e.g. ITec3041" onChange={(e) => setNc({ ...nc, code: e.target.value })} autoFocus />
+              <span className="label">Section (optional)</span>
+              <input className="input" value={nc.section} placeholder="e.g. Sec 1" onChange={(e) => setNc({ ...nc, section: e.target.value })} />
+            </label>
+            <label className="field">
+              <span className="label">Code (optional)</span>
+              <input className="input" value={nc.code} placeholder="e.g. SEng3041" onChange={(e) => setNc({ ...nc, code: e.target.value })} />
             </label>
             <label className="field">
               <span className="label">Credit hours (optional)</span>
               <input className="input" inputMode="decimal" value={nc.crhr} onChange={(e) => setNc({ ...nc, crhr: e.target.value })} />
             </label>
           </div>
-          <label className="field">
-            <span className="label">Course name</span>
-            <input className="input" value={nc.name} placeholder="e.g. Database Systems" onChange={(e) => setNc({ ...nc, name: e.target.value })} />
-          </label>
-          <div className="field">
-            <span className="label">Year of study</span>
-            <ChoiceChips options={years.map((y) => ({ value: y, label: `Year ${y}` }))} value={nc.yearOfStudy || null} onChange={(v) => setNc({ ...nc, yearOfStudy: v })} />
-          </div>
-          <label className="field">
-            <span className="label">Batch (optional)</span>
-            <input className="input" value={nc.batch} placeholder="e.g. 2016" onChange={(e) => setNc({ ...nc, batch: e.target.value })} />
-          </label>
           <div className="row">
             <button className="btn" onClick={() => setCreating(false)}>
               Back
@@ -677,15 +837,29 @@ function AddCourseModal({
                     yearOfStudy: nc.yearOfStudy,
                     batch: nc.batch.trim(),
                     crhr: nc.crhr ? Number(nc.crhr) || null : null,
+                    studentDept: nc.studentDept,
+                    section: nc.section.trim(),
                   },
                   code: nc.code.trim(),
                   name: nc.name.trim(),
-                  sub: subFor({ department: teacherDept, year_of_study: nc.yearOfStudy, batch: nc.batch.trim() }),
+                  sub: subFor({
+                    department: teacherDept,
+                    student_dept: nc.studentDept,
+                    section: nc.section.trim(),
+                    year_of_study: nc.yearOfStudy,
+                    batch: '',
+                  }),
+                  facts: [],
+                  labKnown: false,
+                  labSections: 1,
+                  hasTutorial: false,
                   totalChapters: null,
                   chaptersCovered: null,
                   hasLab: null,
                   totalLabSessions: null,
                   labsCovered: null,
+                  labsBySection: [null],
+                  tutorialsDone: null,
                   tags: [],
                   remarks: '',
                   touched: true,

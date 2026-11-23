@@ -28,7 +28,7 @@ export default function EditReport({ report, onClose }: { report: TeacherReport 
     </label>
   );
   return (
-    <Modal open={!!report} onClose={onClose} title={`Edit report · ${r.course_code}`}>
+    <Modal open={!!report} onClose={onClose} title={`Edit report · ${r.course_name}`}>
       <div className="stack">
         <div className="small muted">
           {r.teacher_name} · {r.course_name} · submitted {new Date(r.created_at).toLocaleString('en-GB')}
@@ -52,7 +52,7 @@ export default function EditReport({ report, onClose }: { report: TeacherReport 
         {r.has_lab && (
           <div className="grid-2">
             {numField('total_lab_sessions', 'Total lab sessions')}
-            {numField('labs_covered', 'Labs covered')}
+            {numField('labs_covered', r.labs_by_section ? `Labs covered (avg of sections ${r.labs_by_section.split('|').join(' · ')})` : 'Labs covered')}
           </div>
         )}
         <label className="field">

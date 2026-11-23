@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Row } from '@/lib/consolidate';
 import { pct, score } from '@/lib/scoring';
 import { fmtDate } from '@/lib/client';
+import { parseSections } from '@/lib/normalize';
 import type { TeacherReport } from '@/lib/types';
 import { Modal, StatusBadge } from '@/components/ui';
 import { FlagBadges, ReviewBadge, useAdmin } from '../shared';
@@ -38,7 +39,7 @@ export default function CourseReport() {
       if (dept && r.department !== dept) return false;
       if (year && String(r.year_of_study) !== year) return false;
       if (teacher && !r.teacherIds.includes(Number(teacher))) return false;
-      if (term && !`${r.code} ${r.name} ${r.teacherNames}`.toLowerCase().includes(term)) return false;
+      if (term && !`${r.code} ${r.name} ${r.classLabel} ${r.teacherNames}`.toLowerCase().includes(term)) return false;
       if (view === 'attention' && !r.flags.some((f) => f.level === 'error' || f.kind === 'dup')) return false;
       if (view === 'missing' && r.report) return false;
       if (view === 'pending' && !(r.report && r.report.review === 'pending')) return false;
@@ -99,7 +100,7 @@ export default function CourseReport() {
           <thead>
             <tr>
               <th>Course</th>
-              <th>Dept</th>
+              <th>Class</th>
               <th className="num">Yr</th>
               <th>Teacher</th>
               <th className="num">Chapters</th>
@@ -113,10 +114,13 @@ export default function CourseReport() {
             {list.map((r) => (
               <tr key={r.key} className="click" onClick={() => setOpenKey(r.key)}>
                 <td>
-                  <div className="bold">{r.code}</div>
-                  <div className="small muted">{r.name}</div>
+                  <div className="bold">{r.name}</div>
+                  {r.code && <div className="small muted">{r.code}</div>}
                 </td>
-                <td>{r.department}</td>
+                <td>
+                  {r.classLabel}
+                  {r.classLabel && !r.classLabel.startsWith(r.department) && <div className="tiny faint">by {r.department}</div>}
+                </td>
                 <td className="num">
                   {r.year_of_study ?? '–'}
                   {r.batch && <div className="tiny faint">{r.batch}</div>}
@@ -124,7 +128,7 @@ export default function CourseReport() {
                 <td className="small">{r.teacherNames || <span className="faint">–</span>}</td>
                 <td className="num">{r.report ? `${r.report.chapters_covered ?? '–'} / ${r.report.total_chapters ?? '–'}` : <span className="faint">–</span>}</td>
                 <td className="num">
-                  {r.report?.has_lab ? `${r.report.labs_covered ?? '–'} / ${r.report.total_lab_sessions ?? '–'}` : <span className="faint">{r.report ? 'No lab' : '–'}</span>}
+                  {r.report?.has_lab ? <LabCell r={r.report} /> : <span className="faint">{r.report ? 'No lab' : '–'}</span>}
                 </td>
                 <td>{r.score ? <StatusBadge status={r.score.status} tone={r.score.tone} rate={r.score.rate} /> : <span className="badge neutral">Not reported</span>}</td>
                 <td className="num">
@@ -158,6 +162,19 @@ export default function CourseReport() {
   );
 }
 
+/** "6 / 16", or per lab section "avg 7 / 16 (8 · 6)" */
+export function LabCell({ r }: { r: TeacherReport }) {
+  const per = parseSections(r.labs_by_section);
+  const avg = r.labs_covered === null ? '–' : Number.isInteger(r.labs_covered) ? r.labs_covered : r.labs_covered.toFixed(1);
+  return (
+    <>
+      {avg} / {r.total_lab_sessions ?? '–'}
+      {per.length > 1 && <div className="tiny faint">sections {per.join(' · ')}</div>}
+      {r.tutorials_done !== null && <div className="tiny faint">tut {r.tutorials_done}</div>}
+    </>
+  );
+}
+
 function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }) {
   const { data, act, toast } = useAdmin();
   const [editing, setEditing] = useState<TeacherReport | null>(null);
@@ -177,10 +194,24 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
   };
 
   return (
-    <Modal open={!!row} onClose={onClose} title={`${row.code} · ${row.name}`} wide>
+    <Modal open={!!row} onClose={onClose} title={[row.name, row.code].filter(Boolean).join(' · ')} wide>
       <div className="stack-lg">
         <div className="row small muted">
-          <span>{row.department}</span>·<span>Year {row.year_of_study ?? '–'}</span>
+          <span>{row.classLabel || row.department}</span>·<span>Year {row.year_of_study ?? '–'}</span>
+          {row.course?.students && (
+            <>
+              ·<span>{row.course.students} students</span>
+            </>
+          )}
+          {row.course && (row.course.lec_hours !== null || row.course.lab_hours !== null) && (
+            <>
+              ·
+              <span>
+                Lec {row.course.lec_hours ?? 0}h / Lab {row.course.lab_hours ?? 0}h{(row.course.lab_sections ?? 0) > 1 ? ` ×${row.course.lab_sections}` : ''} / Tut{' '}
+                {row.course.tut_hours ?? 0}h per week
+              </span>
+            </>
+          )}
           {row.batch && (
             <>
               ·<span>Batch {row.batch}</span>
@@ -251,7 +282,7 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                       <td className="num">
                         {r.chapters_covered} / {r.total_chapters}
                       </td>
-                      <td className="num">{r.has_lab ? `${r.labs_covered ?? '–'} / ${r.total_lab_sessions ?? '–'}` : 'No'}</td>
+                      <td className="num">{r.has_lab ? <LabCell r={r} /> : 'No'}</td>
                       <td>
                         <StatusBadge status={sc.status} tone={sc.tone} rate={sc.rate} />
                       </td>

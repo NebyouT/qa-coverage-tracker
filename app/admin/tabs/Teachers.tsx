@@ -42,7 +42,8 @@ export default function Teachers() {
         </button>
       </div>
       <div className="small muted">
-        Teachers pick their name from this list. Click a row to see that teacher&apos;s courses in the course report.
+        Teachers search for their name in this list; a teacher who is missing can add their name (marked New until you approve or fix
+        it). Click a row to see that teacher&apos;s courses in the course report.
       </div>
       <div className="table-wrap">
         <table className="t">
@@ -61,7 +62,9 @@ export default function Teachers() {
           <tbody>
             {list.map((t) => (
               <tr key={t.teacher!.id} className={`click${t.teacher!.active ? '' : ' dim'}`} onClick={() => goto('report', { teacherId: t.teacher!.id })}>
-                <td className="bold">{t.name}</td>
+                <td className="bold">
+                  {t.name} {t.teacher!.source === 'teacher' && <span className="badge info">New — added by teacher</span>}
+                </td>
                 <td>{t.department}</td>
                 <td className="num">{t.courses}</td>
                 <td className="num">
@@ -77,9 +80,22 @@ export default function Teachers() {
                 <td className="num">{t.flags || <span className="faint">0</span>}</td>
                 <td className="small">{t.lastReport ? fmtDate(t.lastReport) : <span className="faint">never</span>}</td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  <button className="btn xs" onClick={() => setEditing(t.teacher)}>
-                    Edit
-                  </button>
+                  <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                    {t.teacher!.source === 'teacher' && (
+                      <button
+                        className="btn xs"
+                        onClick={async () => {
+                          await act({ action: 'updateTeacher', ...t.teacher!, source: 'admin' });
+                          toast('Teacher approved');
+                        }}
+                      >
+                        Approve
+                      </button>
+                    )}
+                    <button className="btn xs" onClick={() => setEditing(t.teacher)}>
+                      Edit
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

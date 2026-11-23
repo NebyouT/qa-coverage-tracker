@@ -16,8 +16,12 @@ No login for teachers or students. Every submission is kept, and the admin decid
 
 1. **Admin sets up once per semester**
    - *Teachers tab* → paste the staff list (`Name, Dept` per line).
-   - *Courses tab* → **Import Excel** (your QA workbook), **Paste list** from Excel, or add one by one.
-     Assigning teachers to courses is optional, since teachers can add their own courses.
+   - *Courses tab* → **Import Excel**. The file type is detected automatically:
+     - **Course offering** (e.g. `SE - 2019 E.C SEM - I Course Offering.xlsx`): adds the lecturers, the courses with their
+       class/section (`IE [Sec 1]` → class IE, Sec 1), number of students, credit hours, lecture/lab/tutorial hours and
+       sections, and who teaches what. Year and semester come from the title row. Re-importing updates instead of duplicating.
+     - **QA report workbook** (`QA_Course_Coverage_Report.xlsx`): adds courses and, if ticked, their progress.
+   - Or **Paste list** from Excel, or add courses one by one. Teachers can also add their own name and courses ("Other").
    - *Overview* → set the **reporting period** (e.g. `2019 E.C. · Semester I · Mid-term`) and copy the two links to Telegram.
 2. **Teachers** open the link, tap their name (remembered on the phone), add their 2–3 courses once,
    then for each course tap *chapters covered* and *labs done*. Quick-note chips replace typing.
@@ -36,6 +40,11 @@ No login for teachers or students. Every submission is kept, and the admin decid
 
 Performance rate = Lecture % × 70% + Lab % × 30% (lecture only when there is no lab). Weights, status bands,
 departments, years and quick notes are editable in *Settings*.
+
+**Labs and tutorials (from the course offering):** a course with lab hours is a lab course, so the teacher is not asked.
+"Lab sessions planned" starts at the number of teaching weeks (16, in *Settings*). When a course has several lab sections,
+the teacher taps sessions done per section; the lab % uses their average and sections far apart are flagged. Courses
+with tutorial hours get an optional "tutorial sessions done" question (shown in the report, not in the score).
 
 ## Run it on your computer
 

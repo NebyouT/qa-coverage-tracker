@@ -87,6 +87,32 @@ const SCHEMA = [
   `create index if not exists courses_period on courses (academic_year, semester)`,
 ];
 
+/** Each entry upgrades the database by one version. Never edit an old entry; add a new one. */
+const MIGRATIONS: string[][] = [
+  SCHEMA,
+  // v2: course offering details, lab sections, self-registered teachers
+  [
+    `alter table courses
+       add column if not exists student_dept text not null default '',
+       add column if not exists section text not null default '',
+       add column if not exists students int,
+       add column if not exists lec_hours double precision,
+       add column if not exists lab_hours double precision,
+       add column if not exists tut_hours double precision,
+       add column if not exists lec_sections int,
+       add column if not exists lab_sections int,
+       add column if not exists tut_sections int,
+       add column if not exists curriculum_semester text not null default ''`,
+    `alter table teachers add column if not exists source text not null default 'admin'`,
+    `alter table teacher_reports
+       add column if not exists student_dept text not null default '',
+       add column if not exists section text not null default '',
+       add column if not exists labs_by_section text not null default '',
+       add column if not exists tutorials_done int`,
+    `alter table teacher_reports alter column labs_covered type double precision`,
+  ],
+];
+
 const g = globalThis as unknown as { __qaDb?: Promise<QueryFn> };
 
 async function connect(): Promise<QueryFn> {
@@ -107,9 +133,20 @@ async function connect(): Promise<QueryFn> {
     const db = new PGlite(path.join(dir, 'pglite'));
     q = async (text, params = []) => (await db.query<DbRow>(text, params as any[])).rows;
   }
-  // One quick check on cold start; create the tables only the first time.
-  const [{ t }] = await q(`select to_regclass('public.student_reports') as t`);
-  if (!t) for (const stmt of SCHEMA) await q(stmt);
+  // Cold start: find the schema version and apply only the missing migrations.
+  const [{ t }] = await q(`select to_regclass('public.settings') as t`);
+  let version = 0;
+  if (t) {
+    const r = await q(`select value from settings where key = 'schema'`);
+    version = r[0] ? Number(r[0].value) : 1;
+  }
+  if (version < MIGRATIONS.length) {
+    for (let i = version; i < MIGRATIONS.length; i++) for (const stmt of MIGRATIONS[i]) await q(stmt);
+    await q(
+      `insert into settings (key, value) values ('schema', $1::jsonb) on conflict (key) do update set value = excluded.value`,
+      [JSON.stringify(MIGRATIONS.length)],
+    );
+  }
   return q;
 }
 

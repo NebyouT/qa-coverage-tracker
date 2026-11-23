@@ -98,6 +98,30 @@ export default function SettingsTab() {
             <input className="input sm" inputMode="numeric" value={s.gapThreshold} onChange={(e) => setS({ ...s, gapThreshold: Number(e.target.value) || 1 })} />
           </label>
         </div>
+        <div className="grid-3">
+          <label className="field">
+            <span className="label">Teaching weeks per semester</span>
+            <input
+              className="input sm"
+              inputMode="numeric"
+              value={s.weeksPerSemester}
+              onChange={(e) => setS({ ...s, weeksPerSemester: Number(e.target.value) || 16 })}
+            />
+          </label>
+          <label className="field">
+            <span className="label">Flag lab sections apart by (sessions)</span>
+            <input
+              className="input sm"
+              inputMode="numeric"
+              value={s.labGapThreshold}
+              onChange={(e) => setS({ ...s, labGapThreshold: Number(e.target.value) || 3 })}
+            />
+          </label>
+        </div>
+        <p className="small muted">
+          A course with lab hours starts with “lab sessions planned” = teaching weeks (one lab session a week). Teachers can change it. With
+          several lab sections the lab % uses the average of the sections.
+        </p>
       </div>
 
       <div className="grid-2">

@@ -1,7 +1,7 @@
 import 'server-only';
 import { query } from './db';
 import { mergeSettings } from './defaults';
-import { codeKey } from './normalize';
+import { courseKey, nameKey } from './normalize';
 import type { Course, Period, Settings, StudentReport, Teacher, TeacherReport } from './types';
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v ?? ''));
@@ -24,12 +24,24 @@ export async function saveSettings(s: Settings): Promise<Settings> {
 
 // ---------- teachers ----------
 export async function listTeachers(): Promise<Teacher[]> {
-  return query<Teacher>(`select id, name, department, active from teachers order by department, name`);
+  return query<Teacher>(`select id, name, department, active, source from teachers order by department, name`);
 }
 
 export async function getTeacher(id: number): Promise<Teacher | null> {
-  const rows = await query<Teacher>(`select id, name, department, active from teachers where id = $1`, [id]);
+  const rows = await query<Teacher>(`select id, name, department, active, source from teachers where id = $1`, [id]);
   return rows[0] ?? null;
+}
+
+/** Returns the existing teacher with the same name (ignoring case/spaces) or creates one. */
+export async function findOrCreateTeacher(name: string, department: string, source: string): Promise<Teacher> {
+  const all = await listTeachers();
+  const found = all.find((t) => nameKey(t.name) === nameKey(name));
+  if (found) return found;
+  const rows = await query<Teacher>(
+    `insert into teachers (name, department, source) values ($1, $2, $3) returning id, name, department, active, source`,
+    [name, department, source],
+  );
+  return rows[0];
 }
 
 // ---------- courses ----------
@@ -43,14 +55,24 @@ function mapCourse(r: any): Course {
     academic_year: r.academic_year,
     semester: r.semester,
     department: r.department,
+    student_dept: r.student_dept ?? '',
+    section: r.section ?? '',
     year_of_study: r.year_of_study,
     batch: r.batch ?? '',
-    code: r.code,
+    code: r.code ?? '',
     name: r.name,
     crhr: n(r.crhr),
     total_chapters: n(r.total_chapters),
     has_lab: !!r.has_lab,
     total_lab_sessions: n(r.total_lab_sessions),
+    students: n(r.students),
+    lec_hours: n(r.lec_hours),
+    lab_hours: n(r.lab_hours),
+    tut_hours: n(r.tut_hours),
+    lec_sections: n(r.lec_sections),
+    lab_sections: n(r.lab_sections),
+    tut_sections: n(r.tut_sections),
+    curriculum_semester: r.curriculum_semester ?? '',
     source: r.source,
     teacher_ids: (r.teacher_ids ?? []).map(Number),
   };
@@ -69,7 +91,7 @@ export async function listCourses(f: { academicYear?: string; semester?: string 
   }
   const rows = await query(
     `${COURSE_SELECT} ${where.length ? 'where ' + where.join(' and ') : ''}
-     group by c.id order by c.department, c.year_of_study, c.code`,
+     group by c.id order by c.department, c.year_of_study, c.name`,
     params,
   );
   return rows.map(mapCourse);
@@ -80,34 +102,60 @@ export async function getCourse(id: number): Promise<Course | null> {
   return rows[0] ? mapCourse(rows[0]) : null;
 }
 
-export type CourseInput = Omit<Course, 'id' | 'teacher_ids'>;
+type CourseCore = Pick<Course, 'academic_year' | 'semester' | 'department' | 'year_of_study' | 'code' | 'name' | 'source'>;
+export type CourseInput = CourseCore & Partial<Omit<Course, 'id' | 'teacher_ids' | keyof CourseCore>>;
 
-/** Finds a course in the same period/department with the same code (and batch when given). */
-export async function findCourse(c: Pick<Course, 'academic_year' | 'semester' | 'department' | 'code' | 'batch'>) {
+/**
+ * Finds the same course in a period/department: same code (or title when there is no code),
+ * and the same class/section and batch when those are given.
+ */
+export async function findCourse(c: {
+  academic_year: string;
+  semester: string;
+  department: string;
+  code: string;
+  name?: string;
+  batch?: string;
+  student_dept?: string;
+  section?: string;
+}): Promise<Course | null> {
   const rows = await query(
     `${COURSE_SELECT} where c.academic_year = $1 and c.semester = $2 and c.department = $3 group by c.id`,
     [c.academic_year, c.semester, c.department],
   );
-  const key = codeKey(c.code);
-  const same = rows.map(mapCourse).filter((x) => codeKey(x.code) === key);
+  const key = courseKey(c.code, c.name);
+  let same = rows.map(mapCourse).filter((x) => courseKey(x.code, x.name) === key || (x.code && courseKey(x.code, '') === key));
+  if (c.student_dept !== undefined) {
+    same = same.filter((x) => (x.student_dept || x.department) === (c.student_dept || c.department) && (x.section ?? '') === (c.section ?? ''));
+  }
   return same.find((x) => (x.batch ?? '') === (c.batch ?? '')) ?? (c.batch ? null : same[0]) ?? null;
+}
+
+const COURSE_COLS = [
+  'academic_year', 'semester', 'department', 'student_dept', 'section', 'year_of_study', 'batch', 'code', 'name', 'crhr',
+  'total_chapters', 'has_lab', 'total_lab_sessions', 'students', 'lec_hours', 'lab_hours', 'tut_hours', 'lec_sections',
+  'lab_sections', 'tut_sections', 'curriculum_semester', 'source',
+] as const;
+
+function courseValues(c: CourseInput): unknown[] {
+  const d: Record<string, unknown> = {
+    student_dept: '', section: '', batch: '', crhr: null, total_chapters: null, has_lab: false, total_lab_sessions: null,
+    students: null, lec_hours: null, lab_hours: null, tut_hours: null, lec_sections: null, lab_sections: null,
+    tut_sections: null, curriculum_semester: '',
+  };
+  return COURSE_COLS.map((k) => ((c as any)[k] === undefined ? d[k] ?? null : (c as any)[k]));
 }
 
 export async function insertCourse(c: CourseInput): Promise<number> {
   const rows = await query<{ id: number }>(
-    `insert into courses (academic_year, semester, department, year_of_study, batch, code, name, crhr, total_chapters, has_lab, total_lab_sessions, source)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
-    [c.academic_year, c.semester, c.department, c.year_of_study, c.batch ?? '', c.code, c.name, c.crhr, c.total_chapters, c.has_lab, c.total_lab_sessions, c.source],
+    `insert into courses (${COURSE_COLS.join(', ')}) values (${COURSE_COLS.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
+    courseValues(c),
   );
   return rows[0].id;
 }
 
 export async function updateCourse(id: number, c: CourseInput) {
-  await query(
-    `update courses set academic_year=$2, semester=$3, department=$4, year_of_study=$5, batch=$6, code=$7, name=$8,
-       crhr=$9, total_chapters=$10, has_lab=$11, total_lab_sessions=$12, source=$13 where id=$1`,
-    [id, c.academic_year, c.semester, c.department, c.year_of_study, c.batch ?? '', c.code, c.name, c.crhr, c.total_chapters, c.has_lab, c.total_lab_sessions, c.source],
-  );
+  await query(`update courses set ${COURSE_COLS.map((k, i) => `${k} = $${i + 2}`).join(', ')} where id = $1`, [id, ...courseValues(c)]);
 }
 
 export async function setCourseTeachers(courseId: number, teacherIds: number[]) {
@@ -129,8 +177,12 @@ function mapTeacherReport(r: any): TeacherReport {
     chapters_covered: n(r.chapters_covered),
     total_lab_sessions: n(r.total_lab_sessions),
     labs_covered: n(r.labs_covered),
+    tutorials_done: n(r.tutorials_done),
     year_of_study: n(r.year_of_study),
     has_lab: !!r.has_lab,
+    student_dept: r.student_dept ?? '',
+    section: r.section ?? '',
+    labs_by_section: r.labs_by_section ?? '',
   };
 }
 
@@ -172,16 +224,16 @@ export async function listStudentReports(p?: Period): Promise<StudentReport[]> {
 
 export type TeacherReportInput = Omit<TeacherReport, 'id' | 'created_at'>;
 
+const TR_COLS = [
+  'academic_year', 'semester', 'report_type', 'teacher_id', 'teacher_name', 'course_id', 'department', 'student_dept', 'section',
+  'year_of_study', 'batch', 'course_code', 'course_name', 'crhr', 'total_chapters', 'chapters_covered', 'has_lab',
+  'total_lab_sessions', 'labs_covered', 'labs_by_section', 'tutorials_done', 'tags', 'remarks', 'review', 'device',
+] as const;
+
 export async function insertTeacherReport(r: TeacherReportInput): Promise<number> {
   const rows = await query<{ id: number }>(
-    `insert into teacher_reports (academic_year, semester, report_type, teacher_id, teacher_name, course_id, department, year_of_study, batch,
-       course_code, course_name, crhr, total_chapters, chapters_covered, has_lab, total_lab_sessions, labs_covered, tags, remarks, review, device)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) returning id`,
-    [
-      r.academic_year, r.semester, r.report_type, r.teacher_id, r.teacher_name, r.course_id, r.department, r.year_of_study, r.batch,
-      r.course_code, r.course_name, r.crhr, r.total_chapters, r.chapters_covered, r.has_lab, r.total_lab_sessions, r.labs_covered,
-      r.tags, r.remarks, r.review, r.device,
-    ],
+    `insert into teacher_reports (${TR_COLS.join(', ')}) values (${TR_COLS.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
+    TR_COLS.map((k) => (r as any)[k] ?? (k === 'labs_by_section' || k === 'student_dept' || k === 'section' ? '' : null)),
   );
   return rows[0].id;
 }
