@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, periodLabel } from '@/lib/client';
-import { consolidate } from '@/lib/consolidate';
+import { consolidate, needsAttention } from '@/lib/consolidate';
 import type { Period } from '@/lib/types';
 import { ErrorBox, Loading } from '@/components/ui';
 import { AdminCtx, type AdminData, type ReportFilter, type TabId } from './shared';
@@ -99,7 +99,7 @@ export default function AdminApp() {
   if (error && !data) return <main className="wrap-wide"><ErrorBox error={error} onRetry={() => load(view)} /></main>;
   if (!data || !ctx) return <main className="wrap-wide"><Loading /></main>;
 
-  const attention = rows.filter((r) => r.flags.some((f) => f.level === 'error' || f.kind === 'dup')).length;
+  const attention = rows.filter(needsAttention).length;
   const pendingT = data.teacherReports.filter((r) => r.review === 'pending').length;
   const pendingS = new Set(data.studentReports.filter((r) => r.review === 'pending').map((r) => r.submission)).size;
   const isActive = pkey(data.period) === pkey(data.settings.period);

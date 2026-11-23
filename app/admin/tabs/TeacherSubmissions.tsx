@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { score } from '@/lib/scoring';
+import { answerSummary } from '@/lib/consolidate';
 import { fmtDate } from '@/lib/client';
 import type { TeacherReport } from '@/lib/types';
 import { StatusBadge } from '@/components/ui';
@@ -97,7 +98,9 @@ export default function TeacherSubmissions() {
                     <StatusBadge status={sc.status} tone={sc.tone} rate={sc.rate} />
                   </td>
                   <td className="small" style={{ maxWidth: 200 }}>
-                    {[r.tags, r.remarks].filter(Boolean).join('. ') || <span className="faint">–</span>}
+                    {[answerSummary(r.answers, data.settings.questions), r.tags, r.remarks].filter(Boolean).join('. ') || (
+                      <span className="faint">–</span>
+                    )}
                   </td>
                   <td>
                     {f.length ? (

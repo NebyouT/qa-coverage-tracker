@@ -183,6 +183,7 @@ function mapTeacherReport(r: any): TeacherReport {
     student_dept: r.student_dept ?? '',
     section: r.section ?? '',
     labs_by_section: r.labs_by_section ?? '',
+    answers: r.answers ?? '',
   };
 }
 
@@ -193,6 +194,7 @@ function mapStudentReport(r: any): StudentReport {
     chapters_covered: n(r.chapters_covered),
     labs_covered: n(r.labs_covered),
     year_of_study: n(r.year_of_study),
+    answers: r.answers ?? '',
   };
 }
 
@@ -227,13 +229,13 @@ export type TeacherReportInput = Omit<TeacherReport, 'id' | 'created_at'>;
 const TR_COLS = [
   'academic_year', 'semester', 'report_type', 'teacher_id', 'teacher_name', 'course_id', 'department', 'student_dept', 'section',
   'year_of_study', 'batch', 'course_code', 'course_name', 'crhr', 'total_chapters', 'chapters_covered', 'has_lab',
-  'total_lab_sessions', 'labs_covered', 'labs_by_section', 'tutorials_done', 'tags', 'remarks', 'review', 'device',
+  'total_lab_sessions', 'labs_covered', 'labs_by_section', 'tutorials_done', 'answers', 'tags', 'remarks', 'review', 'device',
 ] as const;
 
 export async function insertTeacherReport(r: TeacherReportInput): Promise<number> {
   const rows = await query<{ id: number }>(
     `insert into teacher_reports (${TR_COLS.join(', ')}) values (${TR_COLS.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
-    TR_COLS.map((k) => (r as any)[k] ?? (k === 'labs_by_section' || k === 'student_dept' || k === 'section' ? '' : null)),
+    TR_COLS.map((k) => (r as any)[k] ?? (['labs_by_section', 'student_dept', 'section', 'answers'].includes(k) ? '' : null)),
   );
   return rows[0].id;
 }
@@ -243,11 +245,11 @@ export type StudentReportInput = Omit<StudentReport, 'id' | 'created_at'>;
 export async function insertStudentReport(r: StudentReportInput) {
   await query(
     `insert into student_reports (submission, academic_year, semester, report_type, student_name, department, year_of_study, course_id,
-       course_code, course_name, chapters_covered, labs_covered, comment, review, device)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+       course_code, course_name, chapters_covered, labs_covered, answers, comment, review, device)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [
       r.submission, r.academic_year, r.semester, r.report_type, r.student_name, r.department, r.year_of_study, r.course_id,
-      r.course_code, r.course_name, r.chapters_covered, r.labs_covered, r.comment, r.review, r.device,
+      r.course_code, r.course_name, r.chapters_covered, r.labs_covered, r.answers ?? '', r.comment, r.review, r.device,
     ],
   );
 }

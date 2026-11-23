@@ -1,11 +1,17 @@
 import crypto from 'node:crypto';
 import { bad, fail, ok, readJson } from '@/lib/http';
-import { clean, courseKey, int, studentDepartments } from '@/lib/normalize';
+import { clean, courseKey, int, parseAnswers, studentDepartments } from '@/lib/normalize';
 import { getSettings, insertStudentReport, listCourses } from '@/lib/repo';
 
 export const dynamic = 'force-dynamic';
 
-type Item = { courseId?: number; newCourse?: { code?: string; name: string }; chaptersCovered: number; labsCovered?: number | null };
+type Item = {
+  courseId?: number;
+  newCourse?: { code?: string; name: string };
+  chaptersCovered: number;
+  labsCovered?: number | null;
+  answers?: Record<string, string>;
+};
 
 export async function POST(req: Request) {
   try {
@@ -40,6 +46,7 @@ export async function POST(req: Request) {
     const device = clean(body.device).slice(0, 64);
     const comment = clean(body.comment).slice(0, 500);
 
+    const keys = new Set(s.questions.map((x) => x.key));
     let count = 0;
     for (const it of items) {
       const covered = int(it.chaptersCovered, 0, 100);
@@ -57,6 +64,9 @@ export async function POST(req: Request) {
           cname = course.name;
         }
       }
+      const labs = course?.has_lab ? int(it.labsCovered, 0, 200) : null;
+      const answers = Object.fromEntries(Object.entries(parseAnswers(it.answers)).filter(([k]) => keys.has(k)));
+      if (keys.has('lab') && labs !== null && labs > 0) answers.lab = 'yes';
       await insertStudentReport({
         submission,
         academic_year: s.period.academicYear,
@@ -69,7 +79,8 @@ export async function POST(req: Request) {
         course_code: code,
         course_name: cname,
         chapters_covered: covered,
-        labs_covered: course?.has_lab ? int(it.labsCovered, 0, 200) : null,
+        labs_covered: labs,
+        answers: JSON.stringify(answers),
         comment,
         review: 'pending',
         device,

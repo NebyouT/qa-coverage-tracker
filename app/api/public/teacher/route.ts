@@ -1,5 +1,5 @@
 import { bad, fail, HttpError, ok, readJson } from '@/lib/http';
-import { clean, int, num, splitClass } from '@/lib/normalize';
+import { clean, int, num, parseAnswers, splitClass } from '@/lib/normalize';
 import {
   findCourse,
   findOrCreateTeacher,
@@ -45,6 +45,7 @@ type Item = {
   /** One value per lab section when the course has more than one */
   labsBySection?: (number | null)[];
   tutorialsDone?: number | null;
+  answers?: Record<string, string>;
   tags?: string[];
   remarks?: string;
 };
@@ -156,6 +157,10 @@ export async function POST(req: Request) {
       }
 
       const tags = (Array.isArray(it.tags) ? it.tags : []).map((t) => clean(t).slice(0, 40)).filter(Boolean).slice(0, 10);
+      const keys = new Set(s.questions.map((x) => x.key));
+      const answers = Object.fromEntries(Object.entries(parseAnswers(it.answers)).filter(([k]) => keys.has(k)));
+      // "Lab class started?" follows from the lab sessions number when the teacher did not answer it.
+      if (keys.has('lab') && hasLab && !answers.lab && labsCovered !== null) answers.lab = labsCovered > 0 ? 'yes' : 'no';
       saved.push(
         await insertTeacherReport({
           academic_year: p.academicYear,
@@ -179,6 +184,7 @@ export async function POST(req: Request) {
           labs_covered: labsCovered,
           labs_by_section: labsBySection,
           tutorials_done: int(it.tutorialsDone, 0, 200),
+          answers: JSON.stringify(answers),
           tags: tags.join('; '),
           remarks: clean(it.remarks).slice(0, 500),
           review: 'pending',

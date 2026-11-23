@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Row } from '@/lib/consolidate';
+import { answerSummary, needsAttention, type Row } from '@/lib/consolidate';
 import { pct, score } from '@/lib/scoring';
 import { fmtDate } from '@/lib/client';
 import { parseSections } from '@/lib/normalize';
@@ -40,7 +40,7 @@ export default function CourseReport() {
       if (year && String(r.year_of_study) !== year) return false;
       if (teacher && !r.teacherIds.includes(Number(teacher))) return false;
       if (term && !`${r.code} ${r.name} ${r.classLabel} ${r.teacherNames}`.toLowerCase().includes(term)) return false;
-      if (view === 'attention' && !r.flags.some((f) => f.level === 'error' || f.kind === 'dup')) return false;
+      if (view === 'attention' && !needsAttention(r)) return false;
       if (view === 'missing' && r.report) return false;
       if (view === 'pending' && !(r.report && r.report.review === 'pending')) return false;
       return true;
@@ -249,6 +249,40 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
           </div>
         </div>
 
+        {row.checks.length > 0 && (
+          <div className="stack">
+            <h3>Quiz, assignment, exam and lab</h3>
+            <div className="table-wrap">
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Question</th>
+                    <th>Teacher</th>
+                    <th className="num">Students yes</th>
+                    <th className="num">Students no</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {row.checks.map((ck) => (
+                    <tr key={ck.key}>
+                      <td className="small">{ck.label}</td>
+                      <td>
+                        {ck.teacher ? (
+                          <span className={`badge ${ck.teacher === 'yes' ? 'ok' : 'neutral'}`}>{ck.teacher === 'yes' ? 'Yes' : 'No'}</span>
+                        ) : (
+                          <span className="faint">–</span>
+                        )}
+                      </td>
+                      <td className="num">{ck.studentsYes || <span className="faint">0</span>}</td>
+                      <td className="num">{ck.studentsNo || <span className="faint">0</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         <div className="stack">
           <h3>Teacher submissions ({allTeacher.length})</h3>
           {allTeacher.length > 1 && (
@@ -287,7 +321,7 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                         <StatusBadge status={sc.status} tone={sc.tone} rate={sc.rate} />
                       </td>
                       <td className="small" style={{ maxWidth: 220 }}>
-                        {[r.tags, r.remarks].filter(Boolean).join('. ') || <span className="faint">–</span>}
+                        {[answerSummary(r.answers, data.settings.questions), r.tags, r.remarks].filter(Boolean).join('. ') || <span className="faint">–</span>}
                       </td>
                       <td>
                         <ReviewBadge review={r.review} />
@@ -337,6 +371,7 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                   <th>Student</th>
                   <th className="num">Chapters</th>
                   <th className="num">Labs</th>
+                  <th>Answers</th>
                   <th>Comment</th>
                   <th></th>
                 </tr>
@@ -348,6 +383,7 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                     <td className="small">{r.student_name}</td>
                     <td className="num">{r.chapters_covered}</td>
                     <td className="num">{r.labs_covered ?? '–'}</td>
+                    <td className="small">{answerSummary(r.answers, data.settings.questions) || <span className="faint">–</span>}</td>
                     <td className="small">{r.comment || <span className="faint">–</span>}</td>
                     <td>
                       <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
@@ -363,7 +399,7 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                 ))}
                 {!row.students.length && (
                   <tr>
-                    <td colSpan={6} className="muted center">
+                    <td colSpan={7} className="muted center">
                       No student reports yet.
                     </td>
                   </tr>

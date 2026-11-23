@@ -1,6 +1,7 @@
 import 'server-only';
 import path from 'node:path';
 import fs from 'node:fs';
+import { seedCourses } from './seed';
 
 export type DbRow = Record<string, any>;
 type QueryFn = (text: string, params?: unknown[]) => Promise<DbRow[]>;
@@ -87,8 +88,10 @@ const SCHEMA = [
   `create index if not exists courses_period on courses (academic_year, semester)`,
 ];
 
+type Step = string | ((q: QueryFn) => Promise<unknown>);
+
 /** Each entry upgrades the database by one version. Never edit an old entry; add a new one. */
-const MIGRATIONS: string[][] = [
+const MIGRATIONS: Step[][] = [
   SCHEMA,
   // v2: course offering details, lab sections, self-registered teachers
   [
@@ -110,6 +113,12 @@ const MIGRATIONS: string[][] = [
        add column if not exists labs_by_section text not null default '',
        add column if not exists tutorials_done int`,
     `alter table teacher_reports alter column labs_covered type double precision`,
+  ],
+  // v3: yes/no answers (quiz, assignment, mid-exam, lab class) and the built-in course list
+  [
+    `alter table teacher_reports add column if not exists answers text not null default ''`,
+    `alter table student_reports add column if not exists answers text not null default ''`,
+    (q) => seedCourses(q),
   ],
 ];
 
@@ -141,7 +150,9 @@ async function connect(): Promise<QueryFn> {
     version = r[0] ? Number(r[0].value) : 1;
   }
   if (version < MIGRATIONS.length) {
-    for (let i = version; i < MIGRATIONS.length; i++) for (const stmt of MIGRATIONS[i]) await q(stmt);
+    for (let i = version; i < MIGRATIONS.length; i++) {
+      for (const step of MIGRATIONS[i]) await (typeof step === 'string' ? q(step) : step(q));
+    }
     await q(
       `insert into settings (key, value) values ('schema', $1::jsonb) on conflict (key) do update set value = excluded.value`,
       [JSON.stringify(MIGRATIONS.length)],

@@ -4,13 +4,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, deviceId, periodLabel, store } from '@/lib/client';
 import { classLabel, studentDepartments } from '@/lib/normalize';
-import type { Course, PublicTeacher, Settings } from '@/lib/types';
-import { ChoiceChips, ErrorBox, Loading, NumberChips, Seg } from '@/components/ui';
+import type { Answers, Course, PublicTeacher, Settings } from '@/lib/types';
+import { ChoiceChips, ErrorBox, Loading, NumberChips, Seg, YesNo } from '@/components/ui';
 
 type Boot = { settings: Settings; courses: Course[]; teachers: PublicTeacher[] };
 type Profile = { name: string; department: string; yearOfStudy: number | null; semester: string };
-type Answer = { chapters: number | null; labs: number | null };
-type Extra = { key: string; code: string; name: string; chapters: number | null };
+type Answer = { chapters: number | null; labs: number | null; ans: Answers };
+type Extra = { key: string; code: string; name: string; chapters: number | null; ans: Answers };
+
+const setAns = (ans: Answers, key: string, v: 'yes' | 'no' | undefined): Answers => {
+  const next = { ...ans };
+  if (v) next[key] = v;
+  else delete next[key];
+  return next;
+};
 
 export default function StudentFlow() {
   const [boot, setBoot] = useState<Boot | null>(null);
@@ -87,8 +94,13 @@ export default function StudentFlow() {
         comment,
         device: deviceId(),
         items: [
-          ...answered.map((c) => ({ courseId: c.id, chaptersCovered: answers[c.id].chapters, labsCovered: answers[c.id].labs })),
-          ...extrasReady.map((e) => ({ newCourse: { code: e.code, name: e.name }, chaptersCovered: e.chapters })),
+          ...answered.map((c) => ({
+            courseId: c.id,
+            chaptersCovered: answers[c.id].chapters,
+            labsCovered: answers[c.id].ans.lab === 'no' ? 0 : answers[c.id].labs,
+            answers: answers[c.id].ans,
+          })),
+          ...extrasReady.map((e) => ({ newCourse: { code: e.code, name: e.name }, chaptersCovered: e.chapters, answers: e.ans })),
         ],
       });
       const sent = store.get<Record<string, string>>('qa.studentSent', {});
@@ -209,17 +221,19 @@ export default function StudentFlow() {
 
       <div className="stack">
         <div>
-          <h2>How many chapters has your class covered?</h2>
+          <h2>Your courses so far</h2>
           <p className="small muted">
-            Tap a number for each course. Skip courses you don&apos;t take{sections.size > 1 ? ' or that belong to another section' : ''}.
+            For each course: tap how many chapters were covered, then Yes or No. Skip courses you don&apos;t take
+            {sections.size > 1 ? ' or that belong to another section' : ''}.
           </p>
         </div>
 
         {!mine.length && <div className="card small muted">No courses are listed for your class yet. Search for them below.</div>}
 
         {shown.map((c) => {
-          const a = answers[c.id] ?? { chapters: null, labs: null };
+          const a = answers[c.id] ?? { chapters: null, labs: null, ans: {} };
           const set = (p: Partial<Answer>) => setAnswers((prev) => ({ ...prev, [c.id]: { ...a, ...p } }));
+          const labQ = s.questions.find((qn) => qn.labOnly);
           const done = a.chapters !== null;
           const teachers = c.teacher_ids.map((id) => tName.get(id)).filter(Boolean).join(', ');
           return (
@@ -234,7 +248,7 @@ export default function StudentFlow() {
                   </div>
                 </div>
                 {done && (
-                  <button className="link-btn small" onClick={() => set({ chapters: null, labs: null })}>
+                  <button className="link-btn small" onClick={() => set({ chapters: null, labs: null, ans: {} })}>
                     Clear
                   </button>
                 )}
@@ -243,10 +257,24 @@ export default function StudentFlow() {
                 <span className="label">Chapters covered</span>
                 <NumberChips max={Math.min(c.total_chapters ?? 12, 30)} value={a.chapters} onChange={(v) => set({ chapters: v })} />
               </div>
-              {c.has_lab && (
+              <div className="stack" style={{ gap: 8 }}>
+                {s.questions
+                  .filter((qn) => !qn.labOnly)
+                  .map((qn) => (
+                    <YesNo key={qn.key} label={qn.student} value={a.ans[qn.key]} onChange={(v) => set({ ans: setAns(a.ans, qn.key, v) })} />
+                  ))}
+                {c.has_lab && labQ && (
+                  <YesNo
+                    label={labQ.student}
+                    value={a.ans[labQ.key]}
+                    onChange={(v) => set({ ans: setAns(a.ans, labQ.key, v), labs: v === 'yes' ? a.labs : null })}
+                  />
+                )}
+              </div>
+              {c.has_lab && (!labQ || a.ans[labQ.key] === 'yes') && (
                 <div className="field">
-                  <span className="label">Lab sessions done (optional)</span>
-                  <NumberChips max={Math.min(c.total_lab_sessions ?? 10, 20)} value={a.labs} onChange={(v) => set({ labs: v })} />
+                  <span className="label">How many lab sessions so far? (optional)</span>
+                  <NumberChips min={1} max={Math.min(c.total_lab_sessions ?? 10, 20)} value={a.labs} onChange={(v) => set({ labs: v })} />
                 </div>
               )}
             </div>
@@ -279,6 +307,18 @@ export default function StudentFlow() {
               <span className="label">Chapters covered</span>
               <NumberChips max={12} value={e.chapters} onChange={(v) => setExtras(extras.map((x, j) => (j === i ? { ...x, chapters: v } : x)))} />
             </div>
+            <div className="stack" style={{ gap: 8 }}>
+              {s.questions
+                .filter((qn) => !qn.labOnly)
+                .map((qn) => (
+                  <YesNo
+                    key={qn.key}
+                    label={qn.student}
+                    value={e.ans[qn.key]}
+                    onChange={(v) => setExtras(extras.map((x, j) => (j === i ? { ...x, ans: setAns(x.ans, qn.key, v) } : x)))}
+                  />
+                ))}
+            </div>
           </div>
         ))}
 
@@ -308,7 +348,7 @@ export default function StudentFlow() {
             className="list-btn"
             style={{ borderStyle: 'dashed' }}
             onClick={() => {
-              setExtras([...extras, { key: String(Date.now()), code: '', name: search.trim(), chapters: null }]);
+              setExtras([...extras, { key: String(Date.now()), code: '', name: search.trim(), chapters: null, ans: {} }]);
               setSearch('');
             }}
           >

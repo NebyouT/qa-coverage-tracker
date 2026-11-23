@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { consolidate, summarize, summarizeTeachers } from '@/lib/consolidate';
+import { answerSummary, consolidate, summarize, summarizeTeachers } from '@/lib/consolidate';
 import { fail, requireAdmin } from '@/lib/http';
 import { getSettings, listCourses, listStudentReports, listTeacherReports, listTeachers } from '@/lib/repo';
 import { isFinal, score } from '@/lib/scoring';
@@ -98,6 +98,10 @@ export async function GET(req: Request) {
         { h: "Students' Median Chapters", w: 11 },
         { h: 'Review', w: 10 },
         { h: 'Flags', w: 40 },
+        ...settings.questions.flatMap((qn) => [
+          { h: `${qn.teacher} (Teacher)`, w: 12 },
+          { h: `${qn.student} (Students yes / answered)`, w: 12 },
+        ]),
       ],
       rows.map((r, i) => {
         const rep = r.report;
@@ -139,6 +143,12 @@ export async function GET(req: Request) {
           r.studentMedianChapters,
           rep?.review ?? '',
           r.flags.map((f) => f.label).join('; '),
+          ...settings.questions.flatMap((qn) => {
+            const ck = r.checks.find((x) => x.key === qn.key);
+            if (!ck) return ['', ''];
+            const n = ck.studentsYes + ck.studentsNo;
+            return [ck.teacher ? (ck.teacher === 'yes' ? 'Yes' : 'No') : '', n ? `${ck.studentsYes} / ${n}` : ''];
+          }),
         ];
       }),
       4,
@@ -215,6 +225,7 @@ export async function GET(req: Request) {
         { h: 'Tutorials Done', w: 8 },
         { h: 'Performance', w: 11, pct: true },
         { h: 'Status', w: 26 },
+        { h: 'Answers', w: 30 },
         { h: 'Quick notes', w: 30 },
         { h: 'Remarks', w: 30 },
         { h: 'Review', w: 10 },
@@ -240,6 +251,7 @@ export async function GET(req: Request) {
           r.tutorials_done,
           s.rate,
           s.status,
+          answerSummary(r.answers, settings.questions),
           r.tags,
           r.remarks,
           r.review,
@@ -263,6 +275,7 @@ export async function GET(req: Request) {
         { h: 'Course Name', w: 30 },
         { h: 'Chapters Covered', w: 10 },
         { h: 'Labs Covered', w: 10 },
+        { h: 'Answers', w: 30 },
         { h: 'Comment', w: 30 },
         { h: 'Review', w: 10 },
       ],
@@ -277,6 +290,7 @@ export async function GET(req: Request) {
         r.course_name,
         r.chapters_covered,
         r.labs_covered,
+        answerSummary(r.answers, settings.questions),
         r.comment,
         r.review,
       ]),

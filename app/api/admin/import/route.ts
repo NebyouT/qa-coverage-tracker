@@ -296,6 +296,7 @@ async function importQaReport(ws: ExcelJS.Worksheet, withReports: boolean, setti
           labs_covered: hasLab ? int(c(17), 0, 200) : null,
           labs_by_section: '',
           tutorials_done: null,
+          answers: '',
           tags: '',
           remarks: clean(c(22)).slice(0, 500),
           review: 'verified',

@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, deviceId, initials, periodLabel, store } from '@/lib/client';
-import { classLabel, parseSections, studentDepartments } from '@/lib/normalize';
+import { classLabel, parseAnswers, parseSections, studentDepartments } from '@/lib/normalize';
 import { score } from '@/lib/scoring';
-import type { Course, PublicTeacher, Settings, TeacherReport } from '@/lib/types';
-import { ChoiceChips, ErrorBox, Loading, Modal, NumberChips, Seg, StatusBadge, Stepper } from '@/components/ui';
+import type { Answers, Course, PublicTeacher, Settings, TeacherReport } from '@/lib/types';
+import { ChoiceChips, ErrorBox, Loading, Modal, NumberChips, Seg, StatusBadge, Stepper, YesNo } from '@/components/ui';
 
 type Boot = { settings: Settings; teachers: PublicTeacher[]; courses: Course[] };
 
@@ -29,6 +29,7 @@ type Draft = {
   labsCovered: number | null;
   labsBySection: (number | null)[];
   tutorialsDone: number | null;
+  answers: Answers;
   tags: string[];
   remarks: string;
   touched: boolean;
@@ -82,6 +83,7 @@ function draftFromCourse(c: Course, s: Settings, last?: TeacherReport): Draft {
     labsCovered: last?.labs_covered ?? null,
     labsBySection: Array.from({ length: labSections }, (_, i) => prevSections[i] ?? (labSections === 1 ? last?.labs_covered ?? null : null)),
     tutorialsDone: last?.tutorials_done ?? null,
+    answers: parseAnswers(last?.answers),
     tags: last?.tags ? last.tags.split('; ').filter(Boolean) : [],
     remarks: last?.remarks ?? '',
     touched: false,
@@ -187,6 +189,7 @@ export default function TeacherFlow() {
           labsCovered: d.hasLab ? (d.labSections > 1 ? null : d.labsCovered) : null,
           labsBySection: d.hasLab && d.labSections > 1 ? d.labsBySection.slice(0, d.labSections) : undefined,
           tutorialsDone: d.tutorialsDone,
+          answers: d.answers,
           tags: d.tags,
           remarks: d.remarks,
         })),
@@ -644,9 +647,29 @@ function CourseCard({
             </div>
           )}
 
+          {settings.questions.some((qn) => !qn.labOnly) && (
+            <div className="stack" style={{ gap: 8 }}>
+              {settings.questions
+                .filter((qn) => !qn.labOnly)
+                .map((qn) => (
+                  <YesNo
+                    key={qn.key}
+                    label={qn.teacher}
+                    value={d.answers[qn.key]}
+                    onChange={(v) => {
+                      const next = { ...d.answers };
+                      if (v) next[qn.key] = v;
+                      else delete next[qn.key];
+                      onChange({ answers: next });
+                    }}
+                  />
+                ))}
+            </div>
+          )}
+
           {settings.tags.length > 0 && (
             <div className="field">
-              <span className="label">Quick notes (optional)</span>
+              <span className="label">Other notes (optional)</span>
               <div className="chips">
                 {settings.tags.map((t) => {
                   const on = d.tags.includes(t);
@@ -860,6 +883,7 @@ function AddCourseModal({
                   labsCovered: null,
                   labsBySection: [null],
                   tutorialsDone: null,
+                  answers: {},
                   tags: [],
                   remarks: '',
                   touched: true,

@@ -41,6 +41,15 @@ No login for teachers or students. Every submission is kept, and the admin decid
 Performance rate = Lecture % × 70% + Lab % × 30% (lecture only when there is no lab). Weights, status bands,
 departments, years and quick notes are editable in *Settings*.
 
+**Built-in course list:** `lib/seed.ts` holds the 2019 E.C. Semester I list (22 SE courses with their lecturers from the
+course offering, plus 13 IT courses from the QA workbook). It is loaded automatically into a new or upgraded database, so
+the teacher and student pages are never empty. *Courses → Load built-in list* adds anything missing again. To change the
+list, edit `lib/seed.ts` or use the Courses tab.
+
+**Yes / No questions:** teachers and students answer the same questions for every course: quiz, assignment, mid-exam,
+and lab class (lab courses only). The course report shows the teacher's answer next to the students' count and flags
+it when most students disagree. Wording and questions are editable in *Settings*.
+
 **Labs and tutorials (from the course offering):** a course with lab hours is a lab course, so the teacher is not asked.
 "Lab sessions planned" starts at the number of teaching weeks (16, in *Settings*). When a course has several lab sections,
 the teacher taps sessions done per section; the lab % uses their average and sections far apart are flagged. Courses

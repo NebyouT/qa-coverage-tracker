@@ -2,7 +2,23 @@ export type Band = { name: string; from: number };
 export type Department = { code: string; name: string };
 export type Period = { academicYear: string; semester: string; reportType: string };
 
+/** A yes/no question asked to both teachers and students for every course. */
+export type Question = {
+  key: string;
+  /** Wording for teachers, e.g. "Have you given a quiz?" */
+  teacher: string;
+  /** Wording for students, e.g. "Have you taken a quiz?" */
+  student: string;
+  /** Only asked for courses with a lab */
+  labOnly?: boolean;
+};
+
+/** key -> 'yes' | 'no' */
+export type Answers = Record<string, 'yes' | 'no'>;
+
 export type Settings = {
+  /** Yes/no questions asked for every course (same for teachers and students) */
+  questions: Question[];
   schoolName: string;
   departments: Department[];
   years: number[];
@@ -92,6 +108,8 @@ export type TeacherReport = {
   /** Labs done per lab section, e.g. "8|6" (empty for one section) */
   labs_by_section: string;
   tutorials_done: number | null;
+  /** JSON of Answers */
+  answers: string;
   tags: string;
   remarks: string;
   review: Review;
@@ -113,6 +131,8 @@ export type StudentReport = {
   course_name: string;
   chapters_covered: number | null;
   labs_covered: number | null;
+  /** JSON of Answers */
+  answers: string;
   comment: string;
   review: Review;
   device: string;

@@ -1,8 +1,11 @@
 import type { Course, Period, Settings, StudentReport, Teacher, TeacherReport } from './types';
-import { courseKey, nameKey, parseSections } from './normalize';
+import { courseKey, nameKey, parseAnswers, parseSections } from './normalize';
 import { score, type Score } from './scoring';
 
-export type FlagKind = 'missing' | 'dup' | 'incomplete' | 'lab' | 'gap' | 'labsection' | 'pending' | 'newcourse';
+export type FlagKind = 'missing' | 'dup' | 'incomplete' | 'lab' | 'gap' | 'labsection' | 'answer' | 'pending' | 'newcourse';
+
+/** One yes/no question for a course: the teacher's answer and how students answered. */
+export type Check = { key: string; label: string; teacher: 'yes' | 'no' | null; studentsYes: number; studentsNo: number };
 export type Flag = { kind: FlagKind; label: string; level: 'error' | 'warn' | 'info' };
 
 export type Row = {
@@ -26,6 +29,8 @@ export type Row = {
   studentMedianChapters: number | null;
   studentMedianLabs: number | null;
   score: Score | null;
+  /** Quiz / assignment / mid-exam / lab class answers */
+  checks: Check[];
   flags: Flag[];
   /** Same wording as the Excel "Data Check" column */
   check: string;
@@ -33,6 +38,19 @@ export type Row = {
 
 export const inPeriod = (r: { academic_year: string; semester: string; report_type: string }, p: Period) =>
   r.academic_year === p.academicYear && r.semester === p.semester && r.report_type === p.reportType;
+
+/** Rows the QA team should look at: errors, duplicates, teacher/student disagreements, uneven lab sections. */
+export const needsAttention = (r: Row) =>
+  r.flags.some((f) => f.level === 'error' || f.kind === 'dup' || f.kind === 'answer' || f.kind === 'labsection');
+
+/** "Quiz: yes · Assignment: no" from stored answers JSON */
+export function answerSummary(json: string, questions: { key: string }[]): string {
+  const a = parseAnswers(json);
+  return questions
+    .filter((qn) => a[qn.key])
+    .map((qn) => `${qn.key[0].toUpperCase()}${qn.key.slice(1)}: ${a[qn.key]}`)
+    .join(' · ');
+}
 
 export function median(values: number[]): number | null {
   if (!values.length) return null;
@@ -144,6 +162,33 @@ export function consolidate(args: {
       if (report.review === 'pending') flags.push({ kind: 'pending', label: 'Not verified yet', level: 'info' });
       check = subs.length > 1 ? 'DUPLICATE record' : incomplete ? 'Incomplete' : labMissing ? 'Lab data missing' : 'OK';
     }
+    // Yes/no questions: teacher's answer vs. students' majority.
+    const hasLab = !!(report?.has_lab ?? c?.has_lab);
+    const tAns = parseAnswers(report?.answers);
+    const sAns = g.students.map((st) => parseAnswers(st.answers));
+    const checks: Check[] = settings.questions
+      .filter((qn) => !qn.labOnly || hasLab)
+      .map((qn) => ({
+        key: qn.key,
+        label: qn.teacher,
+        teacher: tAns[qn.key] ?? null,
+        studentsYes: sAns.filter((a) => a[qn.key] === 'yes').length,
+        studentsNo: sAns.filter((a) => a[qn.key] === 'no').length,
+      }));
+    for (const ck of checks) {
+      const n = ck.studentsYes + ck.studentsNo;
+      if (!ck.teacher || n < 2) continue;
+      const studentsSay = ck.studentsYes > ck.studentsNo ? 'yes' : ck.studentsNo > ck.studentsYes ? 'no' : null;
+      if (studentsSay && studentsSay !== ck.teacher) {
+        const word = settings.questions.find((x) => x.key === ck.key)?.key ?? ck.key;
+        flags.push({
+          kind: 'answer',
+          label: `${word[0].toUpperCase()}${word.slice(1)}: teacher ${ck.teacher}, students ${studentsSay} (${ck.studentsYes}/${n} yes)`,
+          level: 'warn',
+        });
+      }
+    }
+
     if (c?.source === 'teacher') flags.push({ kind: 'newcourse', label: 'New course added by teacher', level: 'info' });
 
     rows.push({
@@ -168,6 +213,7 @@ export function consolidate(args: {
       studentMedianChapters,
       studentMedianLabs,
       score: sc,
+      checks,
       flags,
       check,
     });

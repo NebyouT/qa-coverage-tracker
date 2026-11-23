@@ -62,6 +62,16 @@ export default function Courses() {
           ))}
         </select>
         <span className="grow" />
+        <button
+          className="btn sm"
+          title="Adds the built-in 2019 E.C. Semester I list (SE offering + IT) if any course or lecturer is missing"
+          onClick={async () => {
+            const r = await act<{ courses: number; teachers: number }>({ action: 'seedCourses' });
+            toast(r.courses || r.teachers ? `Added ${r.courses} course(s) and ${r.teachers} lecturer(s)` : 'Built-in list is already loaded');
+          }}
+        >
+          Load built-in list
+        </button>
         <button className="btn sm" onClick={() => setImporting(true)}>
           Import Excel
         </button>

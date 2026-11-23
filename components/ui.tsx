@@ -102,6 +102,31 @@ export function ChoiceChips<T extends string | number>({
   );
 }
 
+/** A question with one-tap Yes / No buttons. Tapping the chosen answer again clears it. */
+export function YesNo({ label, value, onChange }: { label: string; value: 'yes' | 'no' | undefined; onChange: (v: 'yes' | 'no' | undefined) => void }) {
+  return (
+    <div className="between" style={{ flexWrap: 'nowrap', gap: 10 }}>
+      <span className="small" style={{ fontWeight: 600 }}>
+        {label}
+      </span>
+      <div className="row" style={{ gap: 6, flexWrap: 'nowrap', flex: 'none' }}>
+        {(['yes', 'no'] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={value === v}
+            className={`chip${value === v ? ' on' : ''}`}
+            style={{ minWidth: 54, minHeight: 40 }}
+            onClick={() => onChange(value === v ? undefined : v)}
+          >
+            {v === 'yes' ? 'Yes' : 'No'}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function StatusBadge({ status, tone, rate }: { status: string; tone: number; rate?: number | null }) {
   if (!status) return <span className="badge neutral">–</span>;
   return (

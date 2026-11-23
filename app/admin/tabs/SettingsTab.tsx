@@ -130,7 +130,46 @@ export default function SettingsTab() {
       </div>
 
       <div className="card stack">
-        <h2>Quick notes for teachers</h2>
+        <div className="between">
+          <h2>Yes / No questions (teachers and students)</h2>
+          <button
+            className="btn sm"
+            onClick={() => setS({ ...s, questions: [...s.questions, { key: `q${s.questions.length + 1}`, teacher: '', student: '' }] })}
+          >
+            ＋ Add
+          </button>
+        </div>
+        <p className="small muted">
+          Asked for every course. The course report compares the teacher&apos;s answer with what most students say. “Lab only” questions are
+          asked only for courses with a lab; teachers answer them through the lab sessions number.
+        </p>
+        {s.questions.map((qn, i) => {
+          const set = (p: Partial<typeof qn>) => setS({ ...s, questions: s.questions.map((x, j) => (j === i ? { ...x, ...p } : x)) });
+          return (
+            <div key={i} className="grid-3" style={{ alignItems: 'end' }}>
+              <label className="field">
+                <span className="label">Teacher wording</span>
+                <input className="input sm" value={qn.teacher} onChange={(e) => set({ teacher: e.target.value })} />
+              </label>
+              <label className="field">
+                <span className="label">Student wording</span>
+                <input className="input sm" value={qn.student} onChange={(e) => set({ student: e.target.value })} />
+              </label>
+              <div className="row" style={{ flexWrap: 'nowrap' }}>
+                <label className="row small">
+                  <input type="checkbox" checked={!!qn.labOnly} onChange={(e) => set({ labOnly: e.target.checked })} /> Lab only
+                </label>
+                <button className="btn xs danger" onClick={() => setS({ ...s, questions: s.questions.filter((_, j) => j !== i) })}>
+                  Remove
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card stack">
+        <h2>Other quick notes for teachers</h2>
         <p className="small muted">One per line. Teachers tap these instead of typing remarks.</p>
         <textarea
           className="textarea"
@@ -163,7 +202,7 @@ export default function SettingsTab() {
           className="btn ghost"
           onClick={() => setS({ ...DEFAULT_SETTINGS, period: s.period, departments: s.departments, teachersOpen: s.teachersOpen, studentsOpen: s.studentsOpen })}
         >
-          Reset bands & weights to Excel defaults
+          Reset everything except period & departments to defaults
         </button>
       </div>
     </div>

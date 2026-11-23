@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { byDeptYear, summarize } from '@/lib/consolidate';
+import { byDeptYear, needsAttention, summarize } from '@/lib/consolidate';
 import { isFinal, pct } from '@/lib/scoring';
 import { periodLabel } from '@/lib/client';
 import type { Period } from '@/lib/types';
@@ -18,7 +18,7 @@ export default function Overview() {
   const withCourse = rows.filter((r) => r.course);
   const reported = rows.filter((r) => r.report).length;
   const submissions = new Set(data.studentReports.map((r) => r.submission)).size;
-  const attention = rows.filter((r) => r.flags.some((f) => f.level === 'error' || f.kind === 'dup')).length;
+  const attention = rows.filter(needsAttention).length;
   const final = isFinal(data.period.reportType);
   const bands = final ? s.finalBands : s.midBands;
   const summary = summarize(rows, s, final);
@@ -132,7 +132,7 @@ export default function Overview() {
         </button>
         <button className="card kpi" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => goto('report', { view: 'attention' })}>
           <div className="v" style={{ color: attention ? 'var(--err)' : undefined }}>{attention}</div>
-          <div className="l">Need attention (duplicates, gaps, missing data)</div>
+          <div className="l">Need attention (duplicates, teacher/student differences, missing data)</div>
         </button>
       </div>
 

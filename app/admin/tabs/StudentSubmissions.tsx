@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { fmtDate } from '@/lib/client';
 import { nameKey } from '@/lib/normalize';
+import { answerSummary } from '@/lib/consolidate';
 import type { StudentReport } from '@/lib/types';
 import { ReviewBadge, useAdmin } from '../shared';
 
@@ -126,8 +127,11 @@ export default function StudentSubmissions() {
                 <td className="small">
                   {g.rows.map((r) => (
                     <div key={r.id}>
-                      <span className={r.course_id ? 'bold' : ''}>{r.course_code || r.course_name}</span>: {r.chapters_covered} ch
+                      <span className={r.course_id ? 'bold' : ''}>{r.course_name || r.course_code}</span>: {r.chapters_covered} ch
                       {r.labs_covered !== null && `, ${r.labs_covered} labs`}
+                      {answerSummary(r.answers, data.settings.questions) && (
+                        <span className="faint"> · {answerSummary(r.answers, data.settings.questions)}</span>
+                      )}
                     </div>
                   ))}
                 </td>

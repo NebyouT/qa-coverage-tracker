@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { seedCourses } from '@/lib/seed';
 import { bad, fail, ok, readJson, requireAdmin } from '@/lib/http';
 import { clean, int, num } from '@/lib/normalize';
 import {
@@ -98,6 +99,15 @@ export async function POST(req: Request) {
         s.gapThreshold = Math.max(Number(s.gapThreshold) || 2, 1);
         s.weeksPerSemester = Math.min(Math.max(Number(s.weeksPerSemester) || 16, 1), 30);
         s.labGapThreshold = Math.max(Number(s.labGapThreshold) || 3, 1);
+        s.questions = (Array.isArray(s.questions) ? s.questions : [])
+          .map((x, i) => ({
+            key: clean(x.key).toLowerCase().replace(/[^a-z0-9]/g, '') || `q${i + 1}`,
+            teacher: clean(x.teacher).slice(0, 120),
+            student: clean(x.student || x.teacher).slice(0, 120),
+            labOnly: !!x.labOnly,
+          }))
+          .filter((x) => x.teacher)
+          .slice(0, 10);
         return ok({ settings: await saveSettings(s) });
       }
       case 'setPeriod': {
@@ -162,6 +172,9 @@ export async function POST(req: Request) {
           added++;
         }
         return ok({ added });
+      }
+      case 'seedCourses': {
+        return ok(await seedCourses(query, settings.weeksPerSemester));
       }
       case 'deleteCourse': {
         await query(`delete from courses where id=$1`, [int(b.id, 1, 1e9)]);

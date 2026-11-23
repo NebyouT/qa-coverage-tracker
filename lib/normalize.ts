@@ -35,6 +35,25 @@ export const parseSections = (v: unknown): number[] =>
     .filter((x) => x !== '' && Number.isFinite(Number(x)))
     .map(Number);
 
+/** Parses stored answers JSON, keeping only yes/no values. */
+export function parseAnswers(v: unknown): Record<string, 'yes' | 'no'> {
+  let o: unknown = v;
+  if (typeof v === 'string') {
+    try {
+      o = v ? JSON.parse(v) : {};
+    } catch {
+      o = {};
+    }
+  }
+  const out: Record<string, 'yes' | 'no'> = {};
+  if (o && typeof o === 'object') {
+    for (const [k, val] of Object.entries(o as Record<string, unknown>).slice(0, 20)) {
+      if (val === 'yes' || val === 'no') out[String(k).slice(0, 30)] = val;
+    }
+  }
+  return out;
+}
+
 /** Class label shown to people: "IE Sec 1" or "SE". */
 export const classLabel = (c: { department: string; student_dept?: string; section?: string }) =>
   [c.student_dept || c.department, c.section].filter(Boolean).join(' ');
