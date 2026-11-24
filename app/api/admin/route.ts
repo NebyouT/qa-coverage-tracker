@@ -173,6 +173,45 @@ export async function POST(req: Request) {
         }
         return ok({ added });
       }
+      case 'useReport': {
+        // Make this submission the one used in the report: verify it and un-verify the others for the same course.
+        const id = int(b.id, 1, 1e9);
+        const rows = await query<{ course_id: number | null; academic_year: string; semester: string; report_type: string }>(
+          `select course_id, academic_year, semester, report_type from teacher_reports where id = $1`,
+          [id],
+        );
+        const r = rows[0];
+        if (!r) bad('Report not found');
+        if (r.course_id) {
+          await query(
+            `update teacher_reports set review = 'pending'
+             where course_id = $1 and academic_year = $2 and semester = $3 and report_type = $4 and review = 'verified' and id <> $5`,
+            [r.course_id, r.academic_year, r.semester, r.report_type, id],
+          );
+        }
+        await query(`update teacher_reports set review = 'verified' where id = $1`, [id]);
+        return ok({ ok: true });
+      }
+      case 'setBatch': {
+        // Fill the batch for all courses of one department + year that have none (needed by the QA workbook).
+        const year = int(b.year, 1, 7);
+        const batch = clean(b.batch).slice(0, 20);
+        if (!year || !batch) bad('Choose a year and type the batch.');
+        const rows = await query(
+          `update courses set batch = $1 where academic_year = $2 and semester = $3 and department = $4 and year_of_study = $5
+             and coalesce(batch, '') = '' returning id`,
+          [batch, clean(b.academicYear) || settings.period.academicYear, clean(b.semester) || settings.period.semester, clean(b.department), year],
+        );
+        return ok({ updated: rows.length });
+      }
+      case 'setCourseCode': {
+        const id = int(b.id, 1, 1e9);
+        const code = clean(b.code).slice(0, 30);
+        if (!id) bad('Course not found');
+        await query(`update courses set code = $2 where id = $1`, [id, code]);
+        await query(`update teacher_reports set course_code = $2 where course_id = $1`, [id, code]);
+        return ok({ ok: true });
+      }
       case 'seedCourses': {
         return ok(await seedCourses(query, settings.weeksPerSemester));
       }

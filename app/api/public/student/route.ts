@@ -10,6 +10,8 @@ type Item = {
   newCourse?: { code?: string; name: string };
   chaptersCovered: number;
   labsCovered?: number | null;
+  /** 1, 2, … when the course has several lab sections */
+  labSection?: number | null;
   answers?: Record<string, string>;
 };
 
@@ -80,6 +82,7 @@ export async function POST(req: Request) {
         course_name: cname,
         chapters_covered: covered,
         labs_covered: labs,
+        lab_section: course?.has_lab && (course.lab_sections ?? 1) > 1 ? int(it.labSection, 1, course.lab_sections ?? 1) : null,
         answers: JSON.stringify(answers),
         comment,
         review: 'pending',

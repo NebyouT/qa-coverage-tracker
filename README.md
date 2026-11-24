@@ -41,6 +41,22 @@ No login for teachers or students. Every submission is kept, and the admin decid
 Performance rate = Lecture % × 70% + Lab % × 30% (lecture only when there is no lab). Weights, status bands,
 departments, years and quick notes are editable in *Settings*.
 
+**Export (Admin → Export):** the default file is the QA team's `QA_Course_Coverage_Report.xlsx`, filled in place:
+same 5 sheets, columns A–X, formulas, drop-downs, colours and charts (template in `templates/`, embedded by
+`node scripts/embed-template.mjs`). One row per course from row 6. Formula columns keep their formulas and also carry the
+computed result, so a system that reads values without recalculating gets correct numbers. The Export tab checks first
+that every row has a course code and batch (the workbook's Data Check needs them) and lets you fill them in place.
+A separate **Detailed workbook** holds every submission, student agreement and answers for the QA team (not for import).
+
+**First report is kept:** when a course is reported again, the new report is stored next to the first one and never
+replaces it. The report and export use the one you choose (*Use this one*), otherwise the first one sent.
+*Duplicates* lists every entry added more than once: same course reported again, same student name reporting the
+same course again, the same course listed twice, and same or similar teacher names.
+
+**Student check:** each student's report is compared with the teacher's (chapters within 1, lab sessions of the
+student's own lab section within 2, same yes/no answers). The course report shows "N of M students agree" and, per
+student, what differs.
+
 **Built-in course list:** `lib/seed.ts` holds the 2019 E.C. Semester I list (22 SE courses with their lecturers from the
 course offering, plus 13 IT courses from the QA workbook). It is loaded automatically into a new or upgraded database, so
 the teacher and student pages are never empty. *Courses → Load built-in list* adds anything missing again. To change the

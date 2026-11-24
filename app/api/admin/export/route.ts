@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { answerSummary, consolidate, summarize, summarizeTeachers } from '@/lib/consolidate';
+import { buildQaWorkbook, qaInputRow } from '@/lib/qaExport';
 import { fail, requireAdmin } from '@/lib/http';
 import { getSettings, listCourses, listStudentReports, listTeacherReports, listTeachers } from '@/lib/repo';
 import { isFinal, score } from '@/lib/scoring';
@@ -49,12 +50,28 @@ export async function GET(req: Request) {
       listStudentReports(period),
     ]);
     const rows = consolidate({ period, settings, courses, teachers, teacherReports, studentReports });
+    const safe = (s: string) => s.replace(/[^\w.\-]+/g, '_');
+
+    // Default: the QA team's workbook, exactly (same sheets, columns, formulas and formatting).
+    if ((sp.get('format') ?? 'qa') === 'qa') {
+      const inputs = rows.map((r) => qaInputRow(r, period, settings)).filter((x): x is NonNullable<typeof x> => x !== null);
+      const { buffer, written, dropped } = await buildQaWorkbook(inputs);
+      return new Response(buffer as unknown as BodyInit, {
+        headers: {
+          'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'content-disposition': `attachment; filename="${safe(`QA_Course_Coverage_Report_${period.academicYear}_${period.semester}_${period.reportType}.xlsx`)}"`,
+          'cache-control': 'no-store',
+          'x-rows-written': String(written),
+          'x-rows-dropped': String(dropped),
+        },
+      });
+    }
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'QA Coverage Tracker';
 
     // 1) QA_Report — same column order as the Excel template (A..W), plus extra columns at the end.
-    const qa = wb.addWorksheet('QA_Report');
+    const qa = wb.addWorksheet('Detailed_Report');
     qa.getCell('A1').value = `${settings.schoolName} - QA Course Coverage Report (${period.reportType}) — ${period.academicYear}, ${period.semester}`;
     qa.getCell('A1').font = { bold: true, size: 14 };
     qa.getCell('A2').value = `Exported ${new Date().toLocaleString('en-GB')}. Uses the latest verified teacher report per course (or latest pending if none is verified).`;
@@ -95,7 +112,9 @@ export async function GET(req: Request) {
         { h: 'Labs Covered per Section', w: 12 },
         { h: 'Tutorials Done', w: 8 },
         { h: 'Student Reports', w: 9 },
+        { h: 'Students Agreeing', w: 9 },
         { h: "Students' Median Chapters", w: 11 },
+        { h: 'Submissions (incl. later ones)', w: 10 },
         { h: 'Review', w: 10 },
         { h: 'Flags', w: 40 },
         ...settings.questions.flatMap((qn) => [
@@ -140,7 +159,9 @@ export async function GET(req: Request) {
           rep?.labs_by_section ? rep.labs_by_section.split('|').join(' / ') : null,
           rep?.tutorials_done ?? null,
           r.students.length,
+          r.agreement.total ? `${r.agreement.agree} of ${r.agreement.total}` : null,
           r.studentMedianChapters,
+          r.submissions.length,
           rep?.review ?? '',
           r.flags.map((f) => f.label).join('; '),
           ...settings.questions.flatMap((qn) => {
@@ -298,7 +319,7 @@ export async function GET(req: Request) {
     ss.getColumn(2).numFmt = 'yyyy-mm-dd hh:mm';
 
     const buf = await wb.xlsx.writeBuffer();
-    const fname = `QA_Coverage_${period.academicYear}_${period.semester}_${period.reportType}.xlsx`.replace(/[^\w.\-]+/g, '_');
+    const fname = safe(`QA_Coverage_DETAILED_${period.academicYear}_${period.semester}_${period.reportType}.xlsx`);
     return new Response(buf as ArrayBuffer, {
       headers: {
         'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

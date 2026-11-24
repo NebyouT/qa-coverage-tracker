@@ -131,6 +131,8 @@ export type StudentReport = {
   course_name: string;
   chapters_covered: number | null;
   labs_covered: number | null;
+  /** Which lab section the student is in (1, 2, …) when the course has several */
+  lab_section: number | null;
   /** JSON of Answers */
   answers: string;
   comment: string;

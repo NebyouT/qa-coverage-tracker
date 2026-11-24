@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, periodLabel } from '@/lib/client';
-import { consolidate, needsAttention } from '@/lib/consolidate';
+import { consolidate, findDuplicates, needsAttention } from '@/lib/consolidate';
 import type { Period } from '@/lib/types';
 import { ErrorBox, Loading } from '@/components/ui';
 import { AdminCtx, type AdminData, type ReportFilter, type TabId } from './shared';
@@ -13,14 +13,18 @@ import StudentSubmissions from './tabs/StudentSubmissions';
 import Teachers from './tabs/Teachers';
 import Courses from './tabs/Courses';
 import SettingsTab from './tabs/SettingsTab';
+import Duplicates from './tabs/Duplicates';
+import ExportTab from './tabs/ExportTab';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'report', label: 'Course report' },
+  { id: 'duplicates', label: 'Duplicates' },
   { id: 'tsubs', label: 'Teacher submissions' },
   { id: 'ssubs', label: 'Student submissions' },
   { id: 'teachers', label: 'Teachers' },
   { id: 'courses', label: 'Courses' },
+  { id: 'export', label: 'Export' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -100,6 +104,18 @@ export default function AdminApp() {
   if (!data || !ctx) return <main className="wrap-wide"><Loading /></main>;
 
   const attention = rows.filter(needsAttention).length;
+  const dups = findDuplicates({
+    period: data.period,
+    courses: data.courses,
+    teachers: data.teachers,
+    teacherReports: data.teacherReports,
+    studentReports: data.studentReports,
+  });
+  const dupCount =
+    dups.teacherReports.filter((g) => g.open > 1).length +
+    dups.studentReports.filter((g) => g.open > 1).length +
+    dups.courses.length +
+    dups.teachers.filter((g) => g.entries.filter((t) => t.active).length > 1).length;
   const pendingT = data.teacherReports.filter((r) => r.review === 'pending').length;
   const pendingS = new Set(data.studentReports.filter((r) => r.review === 'pending').map((r) => r.submission)).size;
   const isActive = pkey(data.period) === pkey(data.settings.period);
@@ -156,6 +172,7 @@ export default function AdminApp() {
             <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => ctx.goto(t.id)}>
               {t.label}
               {t.id === 'report' && attention > 0 && <span className="count">{attention}</span>}
+              {t.id === 'duplicates' && dupCount > 0 && <span className="count">{dupCount}</span>}
               {t.id === 'tsubs' && pendingT > 0 && <span className="count" style={{ background: 'var(--info-soft)', color: 'var(--info)' }}>{pendingT}</span>}
               {t.id === 'ssubs' && pendingS > 0 && <span className="count" style={{ background: 'var(--info-soft)', color: 'var(--info)' }}>{pendingS}</span>}
             </button>
@@ -168,6 +185,8 @@ export default function AdminApp() {
         {tab === 'ssubs' && <StudentSubmissions />}
         {tab === 'teachers' && <Teachers />}
         {tab === 'courses' && <Courses />}
+        {tab === 'duplicates' && <Duplicates />}
+        {tab === 'export' && <ExportTab />}
         {tab === 'settings' && <SettingsTab />}
 
         {toastMsg && (

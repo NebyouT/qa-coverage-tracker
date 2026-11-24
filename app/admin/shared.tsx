@@ -14,7 +14,7 @@ export type AdminData = {
   periods: Period[];
 };
 
-export type TabId = 'overview' | 'report' | 'tsubs' | 'ssubs' | 'teachers' | 'courses' | 'settings';
+export type TabId = 'overview' | 'report' | 'duplicates' | 'tsubs' | 'ssubs' | 'teachers' | 'courses' | 'export' | 'settings';
 export type ReportFilter = { teacherId?: number; dept?: string; view?: string };
 
 export type Ctx = {

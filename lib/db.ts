@@ -120,6 +120,8 @@ const MIGRATIONS: Step[][] = [
     `alter table student_reports add column if not exists answers text not null default ''`,
     (q) => seedCourses(q),
   ],
+  // v4: the lab section a student belongs to
+  [`alter table student_reports add column if not exists lab_section int`],
 ];
 
 const g = globalThis as unknown as { __qaDb?: Promise<QueryFn> };

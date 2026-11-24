@@ -9,7 +9,7 @@ import { ChoiceChips, ErrorBox, Loading, NumberChips, Seg, YesNo } from '@/compo
 
 type Boot = { settings: Settings; courses: Course[]; teachers: PublicTeacher[] };
 type Profile = { name: string; department: string; yearOfStudy: number | null; semester: string };
-type Answer = { chapters: number | null; labs: number | null; ans: Answers };
+type Answer = { chapters: number | null; labs: number | null; labSection: number | null; ans: Answers };
 type Extra = { key: string; code: string; name: string; chapters: number | null; ans: Answers };
 
 const setAns = (ans: Answers, key: string, v: 'yes' | 'no' | undefined): Answers => {
@@ -98,6 +98,7 @@ export default function StudentFlow() {
             courseId: c.id,
             chaptersCovered: answers[c.id].chapters,
             labsCovered: answers[c.id].ans.lab === 'no' ? 0 : answers[c.id].labs,
+            labSection: answers[c.id].labSection,
             answers: answers[c.id].ans,
           })),
           ...extrasReady.map((e) => ({ newCourse: { code: e.code, name: e.name }, chaptersCovered: e.chapters, answers: e.ans })),
@@ -231,7 +232,8 @@ export default function StudentFlow() {
         {!mine.length && <div className="card small muted">No courses are listed for your class yet. Search for them below.</div>}
 
         {shown.map((c) => {
-          const a = answers[c.id] ?? { chapters: null, labs: null, ans: {} };
+          const a = answers[c.id] ?? { chapters: null, labs: null, labSection: null, ans: {} };
+          const labSections = c.has_lab ? Math.max(c.lab_sections ?? 1, 1) : 1;
           const set = (p: Partial<Answer>) => setAnswers((prev) => ({ ...prev, [c.id]: { ...a, ...p } }));
           const labQ = s.questions.find((qn) => qn.labOnly);
           const done = a.chapters !== null;
@@ -248,7 +250,7 @@ export default function StudentFlow() {
                   </div>
                 </div>
                 {done && (
-                  <button className="link-btn small" onClick={() => set({ chapters: null, labs: null, ans: {} })}>
+                  <button className="link-btn small" onClick={() => set({ chapters: null, labs: null, labSection: null, ans: {} })}>
                     Clear
                   </button>
                 )}
@@ -272,10 +274,24 @@ export default function StudentFlow() {
                 )}
               </div>
               {c.has_lab && (!labQ || a.ans[labQ.key] === 'yes') && (
-                <div className="field">
-                  <span className="label">How many lab sessions so far? (optional)</span>
-                  <NumberChips min={1} max={Math.min(c.total_lab_sessions ?? 10, 20)} value={a.labs} onChange={(v) => set({ labs: v })} />
-                </div>
+                <>
+                  {labSections > 1 && (
+                    <div className="field">
+                      <span className="label">Your lab section</span>
+                      <ChoiceChips
+                        options={Array.from({ length: labSections }, (_, i) => ({ value: i + 1, label: `Section ${i + 1}` }))}
+                        value={a.labSection}
+                        onChange={(v) => set({ labSection: v })}
+                      />
+                    </div>
+                  )}
+                  <div className="field">
+                    <span className="label">
+                      How many lab sessions has {labSections > 1 ? 'your section' : 'your class'} had? (optional)
+                    </span>
+                    <NumberChips min={1} max={Math.min(c.total_lab_sessions ?? 16, 20)} value={a.labs} onChange={(v) => set({ labs: v })} />
+                  </div>
+                </>
               )}
             </div>
           );

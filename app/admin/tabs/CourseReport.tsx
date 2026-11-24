@@ -15,7 +15,20 @@ const VIEWS = [
   { id: 'attention', label: 'Needs attention' },
   { id: 'missing', label: 'Not reported' },
   { id: 'pending', label: 'Not verified' },
+  { id: 'disagree', label: 'Students disagree' },
+  { id: 'later', label: 'Has later reports' },
 ];
+
+/** "4 of 5 agree" badge: green when most students agree, red when most don't. */
+export function AgreeBadge({ agree, total }: { agree: number; total: number }) {
+  if (!total) return <span className="faint">0</span>;
+  const cls = agree * 2 > total ? 'ok' : agree * 2 === total ? 'warn' : 'error';
+  return (
+    <span className={`badge ${cls}`} title="Students whose report matches the teacher's (chapters, labs, yes/no answers)">
+      {agree} of {total} agree
+    </span>
+  );
+}
 
 export default function CourseReport() {
   const { data, rows, filter } = useAdmin();
@@ -43,12 +56,14 @@ export default function CourseReport() {
       if (view === 'attention' && !needsAttention(r)) return false;
       if (view === 'missing' && r.report) return false;
       if (view === 'pending' && !(r.report && r.report.review === 'pending')) return false;
+      if (view === 'disagree' && !(r.agreement.total > 0 && r.agreement.agree * 2 < r.agreement.total)) return false;
+      if (view === 'later' && r.submissions.length < 2) return false;
       return true;
     });
   }, [rows, q, dept, year, teacher, view]);
 
   const open = rows.find((r) => r.key === openKey) ?? null;
-  const exportUrl = `/api/admin/export?ay=${encodeURIComponent(data.period.academicYear)}&sem=${encodeURIComponent(data.period.semester)}&rt=${encodeURIComponent(data.period.reportType)}`;
+  const { goto } = useAdmin();
 
   return (
     <div className="stack">
@@ -86,9 +101,9 @@ export default function CourseReport() {
           ))}
         </select>
         <span className="grow" />
-        <a className="btn sm primary" href={exportUrl}>
+        <button className="btn sm primary" onClick={() => goto('export')}>
           ⬇ Export Excel
-        </a>
+        </button>
       </div>
 
       <div className="small muted">
@@ -134,12 +149,13 @@ export default function CourseReport() {
                 <td className="num">
                   {r.students.length ? (
                     <>
-                      {r.students.length}
+                      <AgreeBadge agree={r.agreement.agree} total={r.agreement.total} />
                       <div className="tiny faint">median {r.studentMedianChapters} ch</div>
                     </>
                   ) : (
                     <span className="faint">0</span>
                   )}
+                  {r.submissions.length > 1 && <div className="tiny" style={{ color: 'var(--warn)' }}>{r.submissions.length} teacher reports</div>}
                 </td>
                 <td>
                   <FlagBadges flags={r.flags.filter((f) => f.kind !== 'pending')} max={2} />
@@ -238,9 +254,16 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
           <div className="card tight">
             <div className="label">Students</div>
             <div className="bold">{row.students.length} report{row.students.length === 1 ? '' : 's'}</div>
+            {row.agreement.total > 0 && (
+              <div style={{ margin: '4px 0' }}>
+                <AgreeBadge agree={row.agreement.agree} total={row.agreement.total} />
+              </div>
+            )}
             <div className="small muted">
+              Chapters agree: {row.agreement.chapters.agree}/{row.agreement.chapters.total}
+              {row.agreement.labs.total > 0 && ` · labs agree: ${row.agreement.labs.agree}/${row.agreement.labs.total}`}
+              <br />
               Median chapters: {row.studentMedianChapters ?? '–'}
-              {row.studentMedianLabs !== null && ` · labs ${row.studentMedianLabs}`}
             </div>
           </div>
           <div className="card tight">
@@ -286,7 +309,10 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
         <div className="stack">
           <h3>Teacher submissions ({allTeacher.length})</h3>
           {allTeacher.length > 1 && (
-            <p className="small muted">The report uses the newest verified submission (or the newest one if none is verified). Reject or delete the duplicates you don&apos;t want.</p>
+            <p className="small muted">
+              Later reports never replace the first one by themselves. The report uses the one you choose with <b>Use this one</b> (or the
+              first one sent until you choose). Reject or delete the ones you don&apos;t want.
+            </p>
           )}
           <div className="table-wrap">
             <table className="t">
@@ -303,14 +329,16 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                 </tr>
               </thead>
               <tbody>
-                {allTeacher.map((r) => {
+                {allTeacher.map((r, i) => {
                   const sc = score(r, data.settings);
                   const used = row.report?.id === r.id;
+                  const order = allTeacher.length - i;
                   return (
                     <tr key={r.id} className={r.review === 'rejected' ? 'dim' : ''}>
                       <td className="small">
                         {fmtDate(r.created_at)}
-                        {used && <div><span className="badge info">Used</span></div>}
+                        <div className="tiny faint">{order === 1 ? 'first report' : `report #${order}`}</div>
+                        {used && <div><span className="badge info">Used in report</span></div>}
                       </td>
                       <td className="small">{r.teacher_name}</td>
                       <td className="num">
@@ -328,10 +356,22 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                       </td>
                       <td>
                         <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
-                          {r.review !== 'verified' && (
-                            <button className="btn xs" onClick={() => review('teacher', [r.id], 'verified')}>
-                              ✓ Verify
+                          {!used ? (
+                            <button
+                              className="btn xs primary"
+                              onClick={async () => {
+                                await act({ action: 'useReport', id: r.id });
+                                toast('This report is now used');
+                              }}
+                            >
+                              Use this one
                             </button>
+                          ) : (
+                            r.review !== 'verified' && (
+                              <button className="btn xs" onClick={() => review('teacher', [r.id], 'verified')}>
+                                ✓ Verify
+                              </button>
+                            )
                           )}
                           {r.review !== 'rejected' && (
                             <button className="btn xs" onClick={() => review('teacher', [r.id], 'rejected')}>
@@ -372,18 +412,34 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                   <th className="num">Chapters</th>
                   <th className="num">Labs</th>
                   <th>Answers</th>
+                  <th>Matches teacher?</th>
                   <th>Comment</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {row.students.map((r) => (
+                {row.students.map((r) => {
+                  const ck = row.agreement.byStudent[r.id];
+                  return (
                   <tr key={r.id}>
                     <td className="small">{fmtDate(r.created_at)}</td>
                     <td className="small">{r.student_name}</td>
                     <td className="num">{r.chapters_covered}</td>
-                    <td className="num">{r.labs_covered ?? '–'}</td>
+                    <td className="num">
+                      {r.labs_covered ?? '–'}
+                      {r.lab_section && <div className="tiny faint">section {r.lab_section}</div>}
+                    </td>
                     <td className="small">{answerSummary(r.answers, data.settings.questions) || <span className="faint">–</span>}</td>
+                    <td className="small">
+                      {ck?.agree ? (
+                        <span className="badge ok">✓ Agrees</span>
+                      ) : (
+                        <>
+                          <span className="badge error">✕ Differs</span>
+                          <div className="tiny muted">{ck?.differences.join('; ')}</div>
+                        </>
+                      )}
+                    </td>
                     <td className="small">{r.comment || <span className="faint">–</span>}</td>
                     <td>
                       <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
@@ -396,10 +452,11 @@ function CourseDetail({ row, onClose }: { row: Row | null; onClose: () => void }
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {!row.students.length && (
                   <tr>
-                    <td colSpan={7} className="muted center">
+                    <td colSpan={8} className="muted center">
                       No student reports yet.
                     </td>
                   </tr>

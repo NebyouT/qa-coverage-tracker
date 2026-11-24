@@ -193,6 +193,7 @@ function mapStudentReport(r: any): StudentReport {
     created_at: iso(r.created_at),
     chapters_covered: n(r.chapters_covered),
     labs_covered: n(r.labs_covered),
+    lab_section: n(r.lab_section),
     year_of_study: n(r.year_of_study),
     answers: r.answers ?? '',
   };
@@ -245,11 +246,12 @@ export type StudentReportInput = Omit<StudentReport, 'id' | 'created_at'>;
 export async function insertStudentReport(r: StudentReportInput) {
   await query(
     `insert into student_reports (submission, academic_year, semester, report_type, student_name, department, year_of_study, course_id,
-       course_code, course_name, chapters_covered, labs_covered, answers, comment, review, device)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+       course_code, course_name, chapters_covered, labs_covered, lab_section, answers, comment, review, device)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
     [
       r.submission, r.academic_year, r.semester, r.report_type, r.student_name, r.department, r.year_of_study, r.course_id,
-      r.course_code, r.course_name, r.chapters_covered, r.labs_covered, r.answers ?? '', r.comment, r.review, r.device,
+      r.course_code, r.course_name, r.chapters_covered, r.labs_covered, r.lab_section ?? null, r.answers ?? '', r.comment, r.review,
+      r.device,
     ],
   );
 }

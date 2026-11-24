@@ -565,6 +565,12 @@ function CourseCard({
 
       {open && (
         <div className="stack" style={{ padding: '0 16px 16px', gap: 18 }}>
+          {d.last && (
+            <div className="alert info small">
+              You already reported this course on {new Date(d.last.created_at).toLocaleDateString('en-GB')}. Sending again adds a new report;
+              your first one is kept and the QA team decides which to use.
+            </div>
+          )}
           {d.facts.length > 0 && (
             <div className="chips">
               {d.facts.map((f) => (

@@ -139,12 +139,9 @@ export default function Overview() {
       <div className="stack">
         <div className="between">
           <h2>Summary by department — {periodLabel(data.period)}</h2>
-          <a
-            className="btn sm"
-            href={`/api/admin/export?ay=${encodeURIComponent(data.period.academicYear)}&sem=${encodeURIComponent(data.period.semester)}&rt=${encodeURIComponent(data.period.reportType)}`}
-          >
+          <button className="btn sm" onClick={() => goto('export')}>
             ⬇ Export Excel
-          </a>
+          </button>
         </div>
         <div className="table-wrap">
           <table className="t">

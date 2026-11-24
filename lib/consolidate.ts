@@ -4,6 +4,19 @@ import { score, type Score } from './scoring';
 
 export type FlagKind = 'missing' | 'dup' | 'incomplete' | 'lab' | 'gap' | 'labsection' | 'answer' | 'pending' | 'newcourse';
 
+/** How a student's report compares with the teacher's report used for the course. */
+export type StudentCheck = { agree: boolean; differences: string[] };
+
+export type Agreement = {
+  /** students who reported this course */
+  total: number;
+  /** students whose report matches the teacher's (chapters, labs, yes/no answers) */
+  agree: number;
+  chapters: { total: number; agree: number };
+  labs: { total: number; agree: number };
+  byStudent: Record<number, StudentCheck>;
+};
+
 /** One yes/no question for a course: the teacher's answer and how students answered. */
 export type Check = { key: string; label: string; teacher: 'yes' | 'no' | null; studentsYes: number; studentsNo: number };
 export type Flag = { kind: FlagKind; label: string; level: 'error' | 'warn' | 'info' };
@@ -21,8 +34,10 @@ export type Row = {
   crhr: number | null;
   teacherNames: string;
   teacherIds: number[];
-  /** The submission used for the report: latest verified, otherwise latest pending. */
+  /** The submission used for the report: the newest one you verified, otherwise the FIRST one sent (later ones never replace it). */
   report: TeacherReport | null;
+  /** How many students agree with that report */
+  agreement: Agreement;
   /** All non-rejected teacher submissions for this course in the period. */
   submissions: TeacherReport[];
   students: StudentReport[];
@@ -38,6 +53,132 @@ export type Row = {
 
 export const inPeriod = (r: { academic_year: string; semester: string; report_type: string }, p: Period) =>
   r.academic_year === p.academicYear && r.semester === p.semester && r.report_type === p.reportType;
+
+export type DupGroup<T> = { key: string; title: string; subtitle: string; entries: T[]; open: number };
+
+export type Duplicates = {
+  /** Same course reported more than once by teachers in the period */
+  teacherReports: DupGroup<TeacherReport>[];
+  /** Same student name reporting the same course more than once */
+  studentReports: DupGroup<StudentReport>[];
+  /** Same course listed twice in the course list (same class and section) */
+  courses: DupGroup<Course>[];
+  /** Teacher names that are the same or look like the same person (e.g. "Nebyu T." and "Nebyu Tilahun") */
+  teachers: DupGroup<Teacher>[];
+};
+
+const firstTwo = (name: string) => {
+  const w = nameKey(name).replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean);
+  return w.length ? `${w[0]}|${(w[1] ?? '')[0] ?? ''}` : '';
+};
+
+/** Every entry that was added more than once, newest first inside each group. Rejected entries are shown but not counted as open. */
+export function findDuplicates(args: {
+  period: Period;
+  courses: Course[];
+  teachers: Teacher[];
+  teacherReports: TeacherReport[];
+  studentReports: StudentReport[];
+}): Duplicates {
+  const { period } = args;
+  const courseById = new Map(args.courses.map((c) => [c.id, c]));
+  const label = (c: Course | undefined, name: string, cls: string) => ({
+    title: c?.name ?? name,
+    subtitle: c ? [c.student_dept || c.department, c.section, `Year ${c.year_of_study}`].filter(Boolean).join(' · ') : cls,
+  });
+  const byNewest = <T extends { created_at: string }>(a: T, b: T) => +new Date(b.created_at) - +new Date(a.created_at);
+
+  const tGroups = new Map<string, TeacherReport[]>();
+  for (const r of args.teacherReports.filter((x) => inPeriod(x, period))) {
+    const k = r.course_id ? `c${r.course_id}` : `x${r.department}|${courseKey(r.course_code, r.course_name)}|${r.student_dept}|${r.section}`;
+    tGroups.set(k, [...(tGroups.get(k) ?? []), r]);
+  }
+  const teacherReports = [...tGroups.entries()]
+    .filter(([, v]) => v.length > 1)
+    .map(([key, v]) => ({
+      key,
+      ...label(courseById.get(v[0].course_id ?? -1), v[0].course_name, [v[0].student_dept || v[0].department, v[0].section].filter(Boolean).join(' ')),
+      entries: v.sort(byNewest),
+      open: v.filter((x) => x.review !== 'rejected').length,
+    }));
+
+  const sGroups = new Map<string, StudentReport[]>();
+  for (const r of args.studentReports.filter((x) => inPeriod(x, period))) {
+    const k = `${nameKey(r.student_name)}|${r.course_id ? `c${r.course_id}` : courseKey(r.course_code, r.course_name)}`;
+    sGroups.set(k, [...(sGroups.get(k) ?? []), r]);
+  }
+  const studentReports = [...sGroups.entries()]
+    .filter(([, v]) => v.length > 1)
+    .map(([key, v]) => {
+      const c = courseById.get(v[0].course_id ?? -1);
+      return {
+        key,
+        title: v[0].student_name,
+        subtitle: `${c?.name ?? v[0].course_name} · ${v[0].department} Year ${v[0].year_of_study ?? '–'}`,
+        entries: v.sort(byNewest),
+        open: v.filter((x) => x.review !== 'rejected').length,
+      };
+    });
+
+  const cGroups = new Map<string, Course[]>();
+  for (const c of args.courses.filter((x) => x.academic_year === period.academicYear && x.semester === period.semester)) {
+    const k = `${c.department}|${c.student_dept}|${c.section}|${courseKey('', c.name)}|${c.batch}`;
+    cGroups.set(k, [...(cGroups.get(k) ?? []), c]);
+  }
+  const courses = [...cGroups.entries()]
+    .filter(([, v]) => v.length > 1)
+    .map(([key, v]) => ({ key, ...label(v[0], v[0].name, ''), entries: v, open: v.length }));
+
+  const tnGroups = new Map<string, Teacher[]>();
+  for (const t of args.teachers) {
+    const k = firstTwo(t.name);
+    if (k) tnGroups.set(k, [...(tnGroups.get(k) ?? []), t]);
+  }
+  const teachers = [...tnGroups.entries()]
+    .filter(([, v]) => v.length > 1)
+    .map(([key, v]) => ({ key, title: v.map((t) => t.name).join(' / '), subtitle: 'Same or similar name', entries: v, open: v.length }));
+
+  return { teacherReports, studentReports, courses, teachers };
+}
+
+/**
+ * Compares each student's report with the teacher's: chapters within (gapThreshold - 1), lab sessions of the
+ * student's own lab section within (labGapThreshold - 1), and the same yes/no answers where both answered.
+ */
+export function compareStudents(report: TeacherReport | null, students: StudentReport[], settings: Settings): Agreement {
+  const out: Agreement = { total: students.length, agree: 0, chapters: { total: 0, agree: 0 }, labs: { total: 0, agree: 0 }, byStudent: {} };
+  if (!report) {
+    for (const s of students) out.byStudent[s.id] = { agree: false, differences: ['No teacher report to compare with'] };
+    return out;
+  }
+  const tAns = parseAnswers(report.answers);
+  const perSection = parseSections(report.labs_by_section);
+  for (const s of students) {
+    const diffs: string[] = [];
+    if (s.chapters_covered !== null && report.chapters_covered !== null) {
+      out.chapters.total++;
+      if (Math.abs(s.chapters_covered - report.chapters_covered) < settings.gapThreshold) out.chapters.agree++;
+      else diffs.push(`Chapters ${s.chapters_covered} (teacher ${report.chapters_covered})`);
+    }
+    if (report.has_lab && s.labs_covered !== null) {
+      const teacherLabs =
+        s.lab_section && perSection.length >= s.lab_section ? perSection[s.lab_section - 1] : report.labs_covered;
+      if (teacherLabs !== null && teacherLabs !== undefined) {
+        out.labs.total++;
+        if (Math.abs(s.labs_covered - teacherLabs) < settings.labGapThreshold) out.labs.agree++;
+        else diffs.push(`Labs ${s.labs_covered}${s.lab_section ? ` (sec ${s.lab_section})` : ''} (teacher ${teacherLabs})`);
+      }
+    }
+    const sAns = parseAnswers(s.answers);
+    for (const q of settings.questions) {
+      if (sAns[q.key] && tAns[q.key] && sAns[q.key] !== tAns[q.key]) diffs.push(`${q.key[0].toUpperCase()}${q.key.slice(1)}: ${sAns[q.key]} (teacher ${tAns[q.key]})`);
+    }
+    const agree = diffs.length === 0;
+    if (agree) out.agree++;
+    out.byStudent[s.id] = { agree, differences: diffs };
+  }
+  return out;
+}
 
 /** Rows the QA team should look at: errors, duplicates, teacher/student disagreements, uneven lab sections. */
 export const needsAttention = (r: Row) =>
@@ -112,7 +253,8 @@ export function consolidate(args: {
   const rows: Row[] = [];
   for (const [key, g] of groups) {
     const subs = [...g.subs].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
-    const report = subs.find((s) => s.review === 'verified') ?? subs[0] ?? null;
+    // A later submission never replaces the first one on its own: the admin decides by verifying.
+    const report = subs.find((s) => s.review === 'verified') ?? subs[subs.length - 1] ?? null;
     const c = g.course;
     const sample = g.sample as (TeacherReport & StudentReport) | undefined;
 
@@ -189,6 +331,8 @@ export function consolidate(args: {
       }
     }
 
+    const agreement = compareStudents(report, g.students, settings);
+
     if (c?.source === 'teacher') flags.push({ kind: 'newcourse', label: 'New course added by teacher', level: 'info' });
 
     rows.push({
@@ -208,6 +352,7 @@ export function consolidate(args: {
       teacherNames,
       teacherIds: [...new Set([...(c?.teacher_ids ?? []), ...(subs.map((s) => s.teacher_id).filter(Boolean) as number[])])],
       report,
+      agreement,
       submissions: subs,
       students: g.students,
       studentMedianChapters,
